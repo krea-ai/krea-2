@@ -1,12 +1,12 @@
 # Prompting guidelines
 
 We recommend users to use natural language prompts to generate images.
-The turbo model can generate upto 2k resolution images. Long detailed prompts yield best results, but the model is capable of generating high quality images with minimal prompt engineering. For text rendering, we recommend putting quotes around the words to be rendered.
+The turbo model can generate up to 2k resolution images. Long detailed prompts yield best results, but the model is capable of generating high quality images with minimal prompt engineering. For text rendering, we recommend putting quotes around the words to be rendered.
 If you wish to use LLM assistance for generating longer prompts, check out [expansion.txt](expansion.txt) and use it as a system prompt for LLM of your choice.
 
 ## Examples
 
-All eamples are generated at 2k resolution with the turbo model.
+All examples are generated at 2k resolution with the turbo model.
 
 `immense rocket launch exhaust as seen from extremely close up`
 
