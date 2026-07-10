@@ -4,10 +4,10 @@ import click
 import torch
 from safetensors.torch import load_file
 
-from autoencoder import QwenAutoencoder
-from encoder import Qwen3VLConditioner, TextEncoderConfig
-from mmdit import SingleMMDiTConfig, SingleStreamDiT
-from sampling import sample
+from krea2.inference.sampling import sample
+from krea2.models.autoencoder import QwenAutoencoder
+from krea2.models.conditioner import Qwen3VLConditioner, TextEncoderConfig
+from krea2.models.transformer import SingleMMDiTConfig, SingleStreamDiT
 
 single_mmdit_large_wide = SingleMMDiTConfig(
     features=6144,

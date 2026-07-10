@@ -1,6 +1,17 @@
 .venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+build/
+dist/
+*.egg-info/
+.env
 .claude/
 __pycache__/
 *.pyc
 .hf_home
 .DS_Store
+runs/
+antelopev2/
+*.safetensors
+*.onnx.part

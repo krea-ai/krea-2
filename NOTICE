@@ -1,0 +1,12 @@
+Krea 2 OSS
+Copyright 2026 Krea AI
+
+The source code in this repository is licensed under the Apache License 2.0.
+The Krea 2 model weights are separate from the source code and are governed by
+the Krea 2 Community License Agreement. For the current model-weight terms,
+visit https://krea.ai/krea-2-licensing.
+
+This project can download antelopev2 face-analysis models from
+https://huggingface.co/immich-app/antelopev2. Those files are third-party
+artifacts and remain subject to their own terms. They are not included in the
+source distribution.

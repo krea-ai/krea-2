@@ -29,6 +29,18 @@ The two models are designed to work together. You train LoRAs on RAW and apply t
 uv sync
 ```
 
+Character training and the differentiable face reward are optional dependency
+groups, so inference-only installations stay small:
+
+```bash
+uv sync --extra train --extra face-reward
+```
+
+Use `uv sync --extra train --extra face-reward --extra dev` for a complete
+development environment. PyTorch and torchvision intentionally have no version
+constraints: `uv sync` resolves the newest compatible CUDA 12.8 builds
+available from the configured PyTorch index instead of pinning a release.
+
 Both [Raw](https://huggingface.co/krea/Krea-2-Raw) and [Turbo](https://huggingface.co/krea/Krea-2-Turbo) safetensor files are available on Hugging Face. After downloading the checkpoints, set the `OSS_RAW` and `OSS_TURBO` environment variables to the paths of the downloaded files.
 
 ```bash
@@ -46,7 +58,7 @@ The base undistilled model. Use the full sampler with classifier-free guidance:
 The model has been trained to generate upto 1k resolution.
 
 ```bash
-uv run inference.py "a fox walking in the snow" \
+uv run scripts/inference.py "a fox walking in the snow" \
     --checkpoint oss_raw --steps 52 --cfg 3.5
 ```
 
@@ -56,7 +68,7 @@ Distilled for few-step sampling — run with 8 steps and CFG disabled.
 The model can generate images from 1k ~ 2k resolution.
 
 ```bash
-uv run inference.py "a fox walking in the snow" \
+uv run scripts/inference.py "a fox walking in the snow" \
     --checkpoint oss_turbo --steps 8 --cfg 0.0 --mu 1.15 --width 2048 --height 2048
 ```
 
@@ -76,11 +88,49 @@ uv run inference.py "a fox walking in the snow" \
 | `--checkpoint` | `oss_raw` | Checkpoint to load (`oss_raw`, `oss_turbo`). Defaults to `$K2_CHECKPOINT`. |
 | `--output` | `sample` | Output filename prefix. |
 
+## Character training
+
+The recommended character workflow captions a folder, builds the dataset,
+runs SFT, then finishes with DRaFT-K using a differentiable face-identity
+reward:
+
+```bash
+export OSS_RAW=/models/krea2-raw.safetensors
+export DEEPINFRA_KEY=your_key
+
+uv run --extra train --extra face-reward train_face.py IMAGES \
+  --output-dir runs/my_character \
+  --trigger-word optional_token
+```
+
+The trigger word is optional. Missing antelopev2 face models are discovered or
+downloaded automatically.
+
+For a custom differentiable reward, use the generic entry point:
+
+```bash
+uv run --extra train main.py IMAGES \
+  --output-dir runs/custom_reward \
+  --reward package.module:Reward \
+  --reward-init-kwargs '{"constructor":"values"}' \
+  --reward-kwargs '{"call":"values"}'
+```
+
+The generic pipeline never imports face-specific dependencies. Low-level SFT,
+DRaFT-K, and flow-matching runs are available through `scripts/train.py`.
+
 
 ## Documentation
 
 - [Prompting Guide](docs/prompting.md)
 - [Safety Guide](docs/safety.md)
+- [Inference Notes](docs/inference.md)
+- [INT8 Inference](docs/int8.md)
+- [Project Architecture](docs/architecture.md)
+- [End-to-end Character Training](docs/character_pipeline.md)
+- [SFT versus DRaFT-K Comparison](docs/compare.md)
+- [Character Training Results](docs/results.md)
+- [ComfyUI LoRA Conversion](docs/lora_conversion.md)
 
 ## Inference
 
@@ -111,7 +161,12 @@ Use the **Turbo** model for fast inference with high quality results. The **Raw*
 
 **What license is this model released under?**
 
-Both model weights are under our [community license](https://www.krea.ai/krea-2-licensing) with permissive use. To purchase a commercial license, please contact us at [opensource@krea.ai](mailto:opensource@krea.ai).
+The source code in this repository is released under Apache-2.0. The Krea 2
+model weights are a separate work governed by the
+[Krea 2 Community License Agreement](https://www.krea.ai/krea-2-licensing).
+Review that agreement for the terms that apply to the weights. For a commercial
+license, contact [opensource@krea.ai](mailto:opensource@krea.ai). See
+[`NOTICE`](NOTICE) for the distinction and third-party notices.
 
 ## Citation
 ```

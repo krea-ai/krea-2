@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "characters": 4,
+  "held_out_prompts_per_character": 8,
+  "branches": {
+    "sft_500_draft_k_50": {
+      "mean_identity_similarity": 0.4713481126486191,
+      "face_detection_rate": 0.9375
+    },
+    "sft_1000": {
+      "mean_identity_similarity": 0.2121216274681501,
+      "face_detection_rate": 1.0
+    }
+  },
+  "identity_similarity_ratio": 2.2220653229685015,
+  "mean_optimization_time_ratio": 1.1010813573579383,
+  "optimization_time_ratio_range": [
+    1.0670685722229771,
+    1.1368812025708102
+  ],
+  "notes": [
+    "Evaluation prompts were held out from DRaFT-K training.",
+    "Runs are anonymized and evaluation images are not distributed.",
+    "Optimization steps were fixed; synchronized optimization time was measured."
+  ]
+}

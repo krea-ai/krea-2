@@ -1,7 +1,10 @@
 """Functional flow-matching sampler for the K2 MMDiT (no Scheduler class)."""
 
+import contextlib
 import math
+import time
 
+import click
 import torch
 from einops import rearrange, repeat
 from PIL import Image
@@ -12,7 +15,8 @@ def roundup(value, multiple, name):
     aligned = ((value + multiple - 1) // multiple) * multiple
     if aligned != value:
         print(
-            f"[sample] {name}={value} is not a multiple of {multiple}; padding to {aligned}"
+            f"[sample] {name}={value} is not a multiple of {multiple}; "
+            f"padding to {aligned}"
         )
     return aligned
 
@@ -53,6 +57,23 @@ def timesteps(seq_len, steps, x1, x2, y1=0.5, y2=1.15, sigma=1.0, mu=None):
     return ts.tolist()
 
 
+def _sync_if_cuda(device):
+    device = torch.device(device)
+    if device.type == "cuda" and torch.cuda.is_available():
+        torch.cuda.synchronize(device)
+
+
+def _mark_cudagraph_step():
+    mark = getattr(torch.compiler, "cudagraph_mark_step_begin", None)
+    if mark is not None:
+        mark()
+
+
+def _compiled_model_call(model, **kwargs):
+    _mark_cudagraph_step()
+    return model(**kwargs)
+
+
 @torch.no_grad()
 def sample(
     model,
@@ -73,8 +94,12 @@ def sample(
     y1=0.5,
     y2=1.15,
     mu=None,
+    progress=True,
+    report_latency=True,
 ):
     """End-to-end text-to-image sampling: encode -> euler+CFG denoise -> decode."""
+    _sync_if_cuda(device)
+    init_start = time.perf_counter()
     patch = model.config.patch
 
     # The latent grid (dim // ae.compression) is patchified in `patch`-sized blocks,
@@ -118,18 +143,54 @@ def sample(
     x1 = (minres // (ae.compression * patch)) ** 2
     x2 = (maxres // (ae.compression * patch)) ** 2
     ts = timesteps(x.shape[1], steps, x1, x2, y1=y1, y2=y2, mu=mu)
+    _sync_if_cuda(x.device)
+    init_latency = time.perf_counter() - init_start
 
     # Euler integration of the flow ODE with CFG.
     img = x
-    for tcurr, tprev in zip(ts[:-1], ts[1:]):
-        t = torch.full((len(img),), tcurr, dtype=img.dtype, device=img.device)
-        cond = model(img=img, context=txt, t=t, pos=pos, mask=mask)
+    _sync_if_cuda(img.device)
+    warmup_start = time.perf_counter()
+    if steps > 0:
+        t = torch.full((len(img),), ts[0], dtype=img.dtype, device=img.device)
+        warm_cond = _compiled_model_call(
+            model, img=img, context=txt, t=t, pos=pos, mask=mask
+        )
         if cfg:
-            uncond = model(img=img, context=untxt, t=t, pos=unpos, mask=unmask)
-            v = cond + guidance * (cond - uncond)
-        else:
-            v = cond
-        img = img + (tprev - tcurr) * v
+            warm_cond = warm_cond.clone()
+            warm_uncond = _compiled_model_call(
+                model, img=img, context=untxt, t=t, pos=unpos, mask=unmask
+            )
+            warm_v = warm_cond + guidance * (warm_cond - warm_uncond)
+            del warm_uncond, warm_v
+        del warm_cond, t
+    _sync_if_cuda(img.device)
+    warmup_latency = time.perf_counter() - warmup_start
+
+    step_pairs = zip(ts[:-1], ts[1:])
+    progress_ctx = (
+        click.progressbar(step_pairs, length=steps, label="sampling")
+        if progress
+        else contextlib.nullcontext(step_pairs)
+    )
+    _sync_if_cuda(img.device)
+    denoise_start = time.perf_counter()
+    with progress_ctx as step_iter:
+        for tcurr, tprev in step_iter:
+            t = torch.full((len(img),), tcurr, dtype=img.dtype, device=img.device)
+            cond = _compiled_model_call(
+                model, img=img, context=txt, t=t, pos=pos, mask=mask
+            )
+            if cfg:
+                cond = cond.clone()
+                uncond = _compiled_model_call(
+                    model, img=img, context=untxt, t=t, pos=unpos, mask=unmask
+                )
+                v = cond + guidance * (cond - uncond)
+            else:
+                v = cond
+            img = img + (tprev - tcurr) * v
+    _sync_if_cuda(img.device)
+    denoise_latency = time.perf_counter() - denoise_start
 
     # Unpatchify back to a latent and decode to pixels.
     img = rearrange(
@@ -140,7 +201,18 @@ def sample(
         h=height // (ae.compression * patch),
         w=width // (ae.compression * patch),
     )
+    _sync_if_cuda(img.device)
+    decode_start = time.perf_counter()
     img = ae.decode(img.to(torch.bfloat16))
+    _sync_if_cuda(img.device)
+    decode_latency = time.perf_counter() - decode_start
     img = img.clamp(-1, 1) * 0.5 + 0.5
     img = rearrange(img * 255.0, "b c h w -> b h w c").cpu().byte().numpy()
+    if report_latency:
+        click.echo(
+            f"latency: initialization={init_latency:.3f}s, "
+            f"warmup={warmup_latency:.3f}s, "
+            f"denoising={denoise_latency:.3f}s, "
+            f"vae={decode_latency:.3f}s"
+        )
     return [Image.fromarray(img[i]) for i in range(len(img))]

@@ -121,7 +121,6 @@ class PositionalEncoding(torch.nn.Module):
         self.theta = theta
         self.ntk = ntk
 
-    @torch.compile(fullgraph=True)
     def forward(self, pos: Tensor) -> Tensor:
         return torch.cat(
             [
@@ -151,7 +150,6 @@ class RMSNorm(torch.nn.Module):
             torch.zeros(features, device=device, dtype=torch.float32)
         )
 
-    @torch.compile(fullgraph=True)
     def forward(self, x: Tensor) -> Tensor:
         t, dtype = x.float(), x.dtype
         t = F.rms_norm(
@@ -218,7 +216,6 @@ class LastLayer(torch.nn.Module):
         self.linear = torch.nn.Linear(features, patch * patch * channels, bias=True)
         self.modulation = SimpleModulation(features)
 
-    @torch.compile(fullgraph=True)
     def forward(self, x: Tensor, tvec: Tensor) -> Tensor:
         scale, shift = self.modulation(tvec)
         x = (1 + scale) * self.norm(x) + shift
@@ -276,11 +273,16 @@ class TextFusionTransformer(torch.nn.Module):
         )
 
     def forward(self, x: Tensor, mask: Tensor | None = None) -> Tensor:
-        b, l, n, d = x.shape
-        x = x.reshape(b * l, n, d)
+        batch, length, tokens, features = x.shape
+        x = x.reshape(batch * length, tokens, features)
         for block in self.layerwise_blocks:
             x = block(x.contiguous(), mask=None)
-        x = rearrange(x, "(b l) n d -> b l d n", b=b, l=l)
+        x = rearrange(
+            x,
+            "(b l) n d -> b l d n",
+            b=batch,
+            l=length,
+        )
         x = self.projector(x)
         x = x.squeeze(-1)
 
@@ -396,7 +398,7 @@ class SingleStreamDiT(nn.Module):
         txtlen, imglen = context.shape[1], img.shape[1]
         combined = torch.cat((context, img), dim=1)
 
-        # Pad combined sequence to a multiple of 256 to stabilize compiled kernel shapes.
+        # Pad to a multiple of 256 to stabilize compiled kernel shapes.
         fulllen = combined.shape[1]
         _padlen = (-fulllen) % 256
         if _padlen > 0:
