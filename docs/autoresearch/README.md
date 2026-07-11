@@ -67,8 +67,8 @@ signatures make the dataset, SFT adapter, and completed variants resumable.
 | M1 | Disable DiT/VAE checkpoint recomputation where 24 GB permits | Rejected | Disabling DiT checkpointing OOMs a 24 GB card; disabling only VAE checkpointing is within measurement noise. |
 | B1 | DRaFT batch size 2 | Rejected | Uses 18.9 GiB but improves sample throughput by only about 4.7%; LV is the stronger two-sample construction. |
 | S1 | Increase LV learning rate from 5e-5 to 1e-4 | Superseded | Improves both characters at every matched 20-step checkpoint through step 100; 2e-4 moves the frontier again. |
-| S2 | Increase LV learning rate from 1e-4 to 2e-4 | Promoted | Improves both characters through the 120-step budget boundary; this is the release default. |
-| S3 | Increase LV learning rate from 2e-4 to 4e-4 | Fast option | Improves the 20/40-step frontier, but Tommy regresses after step 40 and its maximum is below 2e-4/120. |
+| S2 | Increase LV learning rate from 1e-4 to 2e-4 | Quality option | Improves both characters through the 120-step budget boundary and gives maximum measured similarity. |
+| S3 | Increase LV learning rate from 2e-4 to 4e-4 | INT8 default | Step 20 is the selected default; step 40 extends the fast frontier, but Tommy regresses after step 40. |
 
 Raw machine-readable curves live beside experiment artifacts; consolidated
 results and rejected variants will be added here as measurements complete.
@@ -120,10 +120,11 @@ above the old 80-update baseline. Julia and Tommy finish 44.1 and 23.0 seconds
 below the cap, leaving fewer than five Tommy updates and no useful room for a
 phase reallocation.
 
-For latency-sensitive runs, 4e-4/40 reaches 0.6466 mean similarity with 100%
-face detection in 471.2 seconds average. Do not extend that rate past 40
-updates: Tommy falls from 0.6278 at step 40 to 0.6206 at step 60. The release
-default remains 2e-4/120 because it has the highest cross-character mean.
+The INT8 default is 4e-4/20: it reaches 0.5237 mean similarity in 371.1 seconds
+average. Extending it to step 40 reaches 0.6466 with 100% face detection in
+471.2 seconds average. Do not extend that rate past 40 updates: Tommy falls
+from 0.6278 at step 40 to 0.6206 at step 60. Use 2e-4/120 explicitly when
+maximum similarity is more important than training latency.
 
 The 20-step curve is monotonic through step 80 on the all-generation metric;
 Julia reaches 0.5785 at step 90, while Tommy's 90-step projection would exceed

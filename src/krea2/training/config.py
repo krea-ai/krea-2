@@ -35,10 +35,10 @@ class PipelineConfig:
     rank: int = 32
     batch_size: int = 1
     sft_steps: int = 500
-    draft_steps: int = 120
+    draft_steps: int = 20
     prompt_count: int = 64
     sft_lr: float = 1e-4
-    draft_lr: float = 2e-4
+    draft_lr: float = 4e-4
     draft_k: int = 1
     draft_lv_samples: int = 1
     denoising_steps: int = 12
@@ -69,9 +69,9 @@ class TrainingConfig:
     rank: int = 32
     batch_size: int = 1
     sft_steps: int = 500
-    draft_steps: int = 120
+    draft_steps: int = 20
     sft_lr: float = 1e-4
-    draft_lr: float = 2e-4
+    draft_lr: float = 4e-4
     draft_k: int = 1
     draft_lv_samples: int = 1
     denoising_steps: int = 12

@@ -651,7 +651,7 @@ def pipeline_options(command):
             "--sft-steps", default=500, show_default=True, type=click.IntRange(1)
         ),
         click.option(
-            "--draft-steps", default=120, show_default=True, type=click.IntRange(1)
+            "--draft-steps", default=20, show_default=True, type=click.IntRange(1)
         ),
         click.option(
             "--prompt-count", default=64, show_default=True, type=click.IntRange(1)
@@ -670,7 +670,7 @@ def pipeline_options(command):
         ),
         click.option(
             "--draft-lr",
-            default=2e-4,
+            default=4e-4,
             show_default=True,
             type=click.FloatRange(min=0, min_open=True),
         ),

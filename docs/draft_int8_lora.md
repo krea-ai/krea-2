@@ -54,8 +54,8 @@ uv run --extra train --extra face-reward scripts/train.py \
   --draft-k 1 \
   --draft-lv-samples 1 \
   --steps 12 \
-  --train-steps 120 \
-  --lr 0.0002 \
+  --train-steps 20 \
+  --lr 0.0004 \
   --seed 43 \
   --cfg 4.5 \
   --output-dir runs/reward_lora
