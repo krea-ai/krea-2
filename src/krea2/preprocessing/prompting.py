@@ -516,8 +516,11 @@ def generate_prompts(
 
 def write_prompts(path: Path, prompts: list[str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    content = "\n".join(prompts) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == content:
+        return
     temporary = path.with_name(path.name + ".tmp")
-    temporary.write_text("\n".join(prompts) + "\n", encoding="utf-8")
+    temporary.write_text(content, encoding="utf-8")
     temporary.replace(path)
 
 

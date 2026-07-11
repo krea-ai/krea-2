@@ -90,40 +90,55 @@ uv run scripts/inference.py "a fox walking in the snow" \
 
 ## Character training
 
-The recommended character workflow captions a folder, builds the dataset,
-runs SFT, then finishes with DRaFT-K using a differentiable face-identity
-reward:
+Install the training extras and point `OSS_RAW` at Krea 2 RAW:
 
 ```bash
+uv sync --extra train --extra face-reward
 export OSS_RAW=/models/krea2-raw.safetensors
 export DEEPINFRA_KEY=your_key
 
 uv run --extra train --extra face-reward train_face.py IMAGES \
-  --output-dir runs/my_character \
-  --trigger-word optional_token
+  --output-dir runs/my_character --trigger-word optional_token
 ```
 
-The trigger word is optional. Missing antelopev2 face models are discovered or
-downloaded automatically.
+`IMAGES` is searched recursively for JPG, PNG, WebP, BMP, or AVIF files. The
+trigger word is optional, and missing antelopev2 models are downloaded
+automatically. The default is SFT 500 + QKVO DRaFT-LV 60.
 
-For a custom differentiable reward, use the generic entry point:
+### Dataset files
+
+Automatic mode captions the image folder and creates 64 DRaFT prompts. For
+local data, captions use CSV and DRaFT prompts use one prompt per line:
+
+```csv
+image_path,prompt
+images/01.jpg,A woman standing in a softly lit studio.
+```
+
+Relative image paths are resolved from the CSV location. As another option,
+place a one-line caption beside every image (`01.jpg` + `01.txt`). Ready-made
+DRaFT prompt files are included at [`prompts/draft_woman.txt`](prompts/draft_woman.txt)
+and [`prompts/draft_man.txt`](prompts/draft_man.txt).
+
+To train without DeepInfra, provide both local files:
 
 ```bash
-uv run --extra train main.py IMAGES \
-  --output-dir runs/custom_reward \
-  --reward package.module:Reward \
-  --reward-init-kwargs '{"constructor":"values"}' \
-  --reward-kwargs '{"call":"values"}'
+uv run --extra train --extra face-reward train_face.py IMAGES \
+  --output-dir runs/my_character \
+  --captions /path/to/captions.csv \
+  --draft-prompts prompts/draft_woman.txt
 ```
 
-The generic pipeline never imports face-specific dependencies. Low-level SFT,
-DRaFT-K, and flow-matching runs are available through `scripts/train.py`.
-The face pipeline defaults to the selected character-training profile: 500 SFT
-updates followed by 60 DRaFT-LV updates, with a 12-step training sampler,
-20-step validation, and a 1e-4 DRaFT learning rate. DRaFT updates QKVO LoRAs
-only and uses saturated centroid identity, mirrored aligned-face EOT, balanced
-expression/viewpoint prompts, and intermittent independent expression-diversity
-samples. Validation uses ten images and seed 42.
+### ComfyUI conversion
+
+```bash
+uv run scripts/convert_lora_to_comfyui.py \
+  runs/my_character/draft/lora_latest.safetensors \
+  runs/my_character/comfyui_lora.safetensors
+```
+
+For a custom differentiable reward, use `main.py`; individual objectives are
+available through `scripts/train.py`.
 
 
 ## Documentation

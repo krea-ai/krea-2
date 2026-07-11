@@ -15,6 +15,19 @@ uv run --extra train --extra face-reward train_face.py \
 
 Omit `--trigger-word` to leave captions and generated prompts unprefixed.
 
+To avoid DeepInfra, provide an `image_path,prompt` CSV and a text file with one
+DRaFT prompt per line:
+
+```bash
+uv run --extra train --extra face-reward train_face.py \
+  /path/to/reference_images --output-dir runs/my_character \
+  --captions /path/to/captions.csv \
+  --draft-prompts prompts/draft_woman.txt
+```
+
+Relative image paths are resolved from the CSV directory. The repository also
+ships `prompts/draft_man.txt`; both supplied files bypass API initialization.
+
 ## Custom rewards
 
 `main.py` runs the same image-folder pipeline but requires a custom reward and

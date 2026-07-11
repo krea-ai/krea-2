@@ -30,6 +30,8 @@ class RewardSpec:
 class PipelineConfig:
     images_dir: Path
     output_dir: Path
+    captions: Path | None = None
+    draft_prompts: Path | None = None
     trigger_word: str | None = None
     checkpoint: str = "oss_raw"
     rank: int = 32

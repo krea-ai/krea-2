@@ -35,6 +35,10 @@ PACKAGE_IMPORTS = (
     "krea2.experiments.comparison",
     "krea2.experiments.autoresearch",
 )
+PROMPT_FILES = (
+    (ROOT / "prompts" / "draft_woman.txt", "A woman "),
+    (ROOT / "prompts" / "draft_man.txt", "A man "),
+)
 
 
 def run(command: list[str]) -> None:
@@ -55,6 +59,14 @@ def main(argv: list[str] | None = None) -> int:
     run([sys.executable, "-m", "ruff", "check", "."])
     run([sys.executable, "-m", "ruff", "format", "--check", "."])
     run([sys.executable, "-m", "pytest", "-q", "-m", "not cuda"])
+    for path, prefix in PROMPT_FILES:
+        prompts = [
+            line.strip() for line in path.read_text().splitlines() if line.strip()
+        ]
+        if len(prompts) != 64 or not all(
+            prompt.startswith(prefix) for prompt in prompts
+        ):
+            raise RuntimeError(f"invalid bundled prompt file: {path}")
     for module in PACKAGE_IMPORTS:
         run([sys.executable, "-c", f"import {module}"])
     for script in CLI_FILES:

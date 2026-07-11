@@ -188,6 +188,41 @@ def test_dataset_and_prompt_generation_cache():
     print("ok  absolute SFT CSV and cached repository prompt-generator stage")
 
 
+def test_offline_dataset_and_prompt_inputs():
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        image = root / "images" / "person.jpg"
+        make_image(image, (10, 20, 30))
+        supplied_csv = root / "offline" / "captions.csv"
+        supplied_csv.parent.mkdir()
+        supplied_csv.write_text(
+            "image_path,prompt\n../images/person.jpg,A generic person in a studio.\n"
+        )
+        dataset = root / "run" / "data" / "dataset.csv"
+        assert pipeline.copy_supplied_dataset(supplied_csv, dataset) == 1
+        with dataset.open(newline="") as handle:
+            row = next(csv.DictReader(handle))
+        assert row == {
+            "image_path": str(image.resolve()),
+            "prompt": "A generic person in a studio.",
+        }
+
+        supplied_prompts = root / "offline" / "prompts.txt"
+        supplied_prompts.write_text("A person outdoors.\n\nA person indoors.\n")
+        copied = root / "run" / "data" / "draft_prompts.txt"
+        assert pipeline.copy_supplied_prompts(supplied_prompts, copied) == [
+            "A person outdoors.",
+            "A person indoors.",
+        ]
+        assert copied.read_text().splitlines() == [
+            "A person outdoors.",
+            "A person indoors.",
+        ]
+        prompt_mtime = copied.stat().st_mtime_ns
+        pipeline.copy_supplied_prompts(supplied_prompts, copied)
+        assert copied.stat().st_mtime_ns == prompt_mtime
+
+
 def write_sparse(path: Path, size: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as handle:
@@ -344,6 +379,8 @@ def test_cli_help():
     assert "--reward" in result.output
     assert "--face-model-dir" not in result.output
     assert "--regenerate-prompts" in result.output
+    assert "--captions" in result.output
+    assert "--draft-prompts" in result.output
     assert "--draft-steps INTEGER" in result.output
     assert "[default: 60;" in result.output
     face_result = CliRunner().invoke(face_pipeline.main, ["--help"])

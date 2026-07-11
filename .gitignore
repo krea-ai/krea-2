@@ -12,6 +12,7 @@ __pycache__/
 .hf_home
 .DS_Store
 runs/
+docs/
 antelopev2/
 *.safetensors
 *.onnx.part

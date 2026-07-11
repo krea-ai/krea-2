@@ -228,6 +228,53 @@ def write_dataset_csv(path: Path, images: list[Path], captions: list[str]) -> No
         temporary.replace(path)
 
 
+def copy_supplied_dataset(source: Path, destination: Path) -> int:
+    """Validate and normalize an offline image_path,prompt CSV."""
+    source = source.expanduser().resolve()
+    try:
+        with source.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if not {"image_path", "prompt"}.issubset(reader.fieldnames or []):
+                raise ValueError("CSV must contain image_path,prompt columns")
+            images = []
+            captions = []
+            for row_number, row in enumerate(reader, start=2):
+                image_value = (row.get("image_path") or "").strip()
+                if not image_value:
+                    raise ValueError(f"row {row_number} has an empty image_path")
+                image = Path(image_value).expanduser()
+                if not image.is_absolute():
+                    image = source.parent / image
+                image = image.resolve()
+                if not caption_script.is_image_file(image):
+                    raise ValueError(f"row {row_number} is not a valid image: {image}")
+                images.append(image)
+                captions.append(normalize_caption(row.get("prompt") or ""))
+    except (OSError, ValueError) as exc:
+        raise click.ClickException(f"invalid --captions file: {exc}") from exc
+    if not images:
+        raise click.ClickException(f"invalid --captions file: {source} is empty")
+    write_dataset_csv(destination, images, captions)
+    return len(images)
+
+
+def copy_supplied_prompts(source: Path, destination: Path) -> list[str]:
+    """Validate and copy an offline one-prompt-per-line file."""
+    source = source.expanduser().resolve()
+    try:
+        prompts = [
+            line.strip()
+            for line in source.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+    except OSError as exc:
+        raise click.ClickException(f"invalid --draft-prompts file: {exc}") from exc
+    if not prompts:
+        raise click.ClickException(f"invalid --draft-prompts file: {source} is empty")
+    prompt_script.write_prompts(destination, prompts)
+    return prompts
+
+
 def prepare_draft_prompts(
     dataset_csv: Path,
     output_path: Path,
@@ -514,11 +561,6 @@ def run_pipeline(config: PipelineConfig, reward: RewardSpec) -> Path:
     images = discover_images(images_dir, exclude_dir=output_dir)
     if not images:
         raise click.ClickException(f"no supported images found under {images_dir}")
-    if config.batch_size > len(images):
-        raise click.ClickException(
-            f"--batch-size {config.batch_size} exceeds the "
-            f"{len(images)} discovered images"
-        )
     if config.draft_k > config.denoising_steps:
         raise click.ClickException("--draft-k cannot exceed --denoising-steps")
     if config.draft_lv_samples and config.draft_k != 1:
@@ -529,21 +571,40 @@ def run_pipeline(config: PipelineConfig, reward: RewardSpec) -> Path:
     caption_cache = data_dir / "captions.json"
     dataset_csv = data_dir / "dataset.csv"
     draft_prompts_path = data_dir / "draft_prompts.txt"
-    captions = prepare_captions(
-        images,
-        caption_cache,
-        model_name=config.caption_model,
-        recaption=config.recaption,
-    )
-    write_dataset_csv(dataset_csv, images, captions)
-    prompts = prepare_draft_prompts(
-        dataset_csv,
-        draft_prompts_path,
-        count=config.prompt_count,
-        seed=config.seed + 10_000,
-        model_name=config.prompt_model,
-        regenerate=config.regenerate_prompts,
-    )
+    if config.captions is not None:
+        if config.recaption:
+            raise click.ClickException("--captions and --recaption are incompatible")
+        dataset_size = copy_supplied_dataset(config.captions, dataset_csv)
+        click.echo(f"using offline SFT captions from {config.captions}")
+    else:
+        captions = prepare_captions(
+            images,
+            caption_cache,
+            model_name=config.caption_model,
+            recaption=config.recaption,
+        )
+        write_dataset_csv(dataset_csv, images, captions)
+        dataset_size = len(images)
+    if config.batch_size > dataset_size:
+        raise click.ClickException(
+            f"--batch-size {config.batch_size} exceeds the {dataset_size} SFT samples"
+        )
+    if config.draft_prompts is not None:
+        if config.regenerate_prompts:
+            raise click.ClickException(
+                "--draft-prompts and --regenerate-prompts are incompatible"
+            )
+        prompts = copy_supplied_prompts(config.draft_prompts, draft_prompts_path)
+        click.echo(f"using offline DRaFT prompts from {config.draft_prompts}")
+    else:
+        prompts = prepare_draft_prompts(
+            dataset_csv,
+            draft_prompts_path,
+            count=config.prompt_count,
+            seed=config.seed + 10_000,
+            model_name=config.prompt_model,
+            regenerate=config.regenerate_prompts,
+        )
     click.echo(f"wrote SFT dataset to {dataset_csv}")
     click.echo(f"wrote {len(prompts)} DRaFT prompts to {draft_prompts_path}")
 
@@ -585,6 +646,10 @@ def run_pipeline(config: PipelineConfig, reward: RewardSpec) -> Path:
         output_dir / "pipeline_plan.json",
         {
             "images_dir": str(images_dir),
+            "captions": None if config.captions is None else str(config.captions),
+            "draft_prompts": (
+                None if config.draft_prompts is None else str(config.draft_prompts)
+            ),
             "trigger_word": trigger_word,
             "reward": {
                 "target": reward.target,
@@ -650,6 +715,16 @@ def pipeline_options(command):
             "--output-dir",
             required=True,
             type=click.Path(file_okay=False, path_type=Path),
+        ),
+        click.option(
+            "--captions",
+            type=click.Path(exists=True, dir_okay=False, path_type=Path),
+            help="offline image_path,prompt CSV; skips caption generation",
+        ),
+        click.option(
+            "--draft-prompts",
+            type=click.Path(exists=True, dir_okay=False, path_type=Path),
+            help="offline one-prompt-per-line file; skips prompt generation",
         ),
         click.option("--trigger-word", default=None),
         click.option(
