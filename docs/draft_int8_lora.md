@@ -54,8 +54,8 @@ uv run --extra train --extra face-reward scripts/train.py \
   --draft-k 1 \
   --draft-lv-samples 1 \
   --steps 12 \
-  --train-steps 20 \
-  --lr 0.0004 \
+  --train-steps 60 \
+  --lr 0.00005 \
   --seed 43 \
   --cfg 4.5 \
   --output-dir runs/reward_lora
@@ -65,8 +65,8 @@ uv run --extra train --extra face-reward scripts/train.py \
 the final generated latent is detached, re-noised at the last integration
 time, and passed through one additional differentiable denoising step. The
 original and perturbed rewards are averaged. LV currently requires
-`--draft-k 1`. Keep `--validation-steps 20` separate from the shorter training
-sampler when comparing adapters.
+`--draft-k 1`. Keep `--validation-steps 20` explicit when researching a
+different training sampler so evaluation remains comparable.
 
 The reward object is loaded from `module:object`. If the object is a class it is
 constructed with `--reward-init-kwargs`. During training it is called as:

@@ -118,10 +118,10 @@ uv run --extra train main.py IMAGES \
 
 The generic pipeline never imports face-specific dependencies. Low-level SFT,
 DRaFT-K, and flow-matching runs are available through `scripts/train.py`.
-The face pipeline defaults to the measured character-training configuration:
-500 SFT updates followed by 20 DRaFT-LV updates with a 12-step training
-sampler and 4e-4 DRaFT learning rate. Validation remains fixed at 20 steps,
-ten images, and seed 42.
+The face pipeline defaults to the selected character-training profile: 500 SFT
+updates followed by 60 DRaFT-LV updates, with a 12-step training sampler,
+20-step validation, and a 5e-5 DRaFT learning rate. Validation uses ten images
+and seed 42.
 
 
 ## Documentation

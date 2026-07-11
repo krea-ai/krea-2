@@ -1,7 +1,7 @@
-# Controlled SFT versus DRaFT-K comparison
+# Controlled SFT versus DRaFT-LV comparison
 
 `scripts/compare.py` runs one controlled character experiment with a shared first 500
-SFT updates. One branch receives 50 DRaFT-K updates; the other restores the
+SFT updates. One branch receives 60 DRaFT-LV updates; the other restores the
 complete step-500 SFT state and continues to global step 1000.
 
 ```bash
@@ -15,8 +15,9 @@ uv run --extra train --extra face-reward scripts/compare.py \
 ```
 
 The trigger word is optional. The default experiment uses rank 32, batch size
-1, 64 DRaFT training prompts, eight held-out evaluation prompts, 20 denoising
-steps, and CFG 4.5.
+1, 64 DRaFT training prompts, ten held-out evaluation prompts, one LV sample,
+a 12-step training sampler, 20-step evaluation, DRaFT LR 5e-5, CFG 4.5, and
+seed 42.
 
 ## Fairness contract
 
@@ -24,13 +25,15 @@ steps, and CFG 4.5.
   500.
 - The SFT continuation restores LoRA tensors, AdamW moments, Torch CPU/CUDA
   RNG, the cached SFT tensors, and the exact shuffled-data cursor.
-- DRaFT-K starts from the same step-500 LoRA but intentionally uses a fresh
+- DRaFT-LV starts from the same step-500 LoRA but intentionally uses a fresh
   AdamW optimizer.
-- The eight evaluation prompts are excluded from DRaFT training.
+- The ten evaluation prompts are excluded from DRaFT training.
 - Every evaluation uses the same effective prompts, ordering, image seeds,
   resolution, sampler settings, and empty negative prompt.
-- Counts are fixed at 500+50 versus 1000. Measured synchronized optimization
-  time is reported rather than used as a stopping condition.
+- Counts are fixed at 500+60 versus 1000. Measured synchronized optimization
+time is reported rather than used as a stopping condition.
+First-step compilation is excluded with `--timing-warmup-steps 1`; validation,
+initialization, and checkpoint I/O remain outside synchronized step timing.
 
 There are no intermediate validations. Images are generated only before SFT,
 after shared SFT, after DRaFT-K, and after the continued SFT run. Per-step
@@ -51,10 +54,10 @@ output/
     training_summary.json
     validation/step_000000/...
     validation/step_000500/...
-  draft_50/
+  draft_60/
     lora_latest.safetensors
     training_summary.json
-    validation/step_000050/...
+    validation/step_000060/...
   sft_1000/
     lora_latest.safetensors
     training_state_step_001000.pt
@@ -66,7 +69,7 @@ output/
   metrics.csv
 ```
 
-The annotated grid has `SFT 500 + DRaFT-K 50` on the first row and `SFT 1000`
+The annotated grid has `SFT 500 + DRaFT-LV 60` on the first row and `SFT 1000`
 on the second. Individual images and prompt sidecars remain available.
 
 `experiment_results.json` reports synchronized optimization time, stage wall
@@ -78,6 +81,12 @@ Every training stage has a command/dependency signature. Re-running the same
 command reuses complete stages; `--force` runs all three again. Training-state
 files are deliberately self-contained and can be large because they contain
 AdamW moments and cached text embeddings.
+
+When changing only DRaFT hyperparameters, combine `--reuse-sft-branches` with
+`--force`. The runner verifies the SFT-500 and SFT-1000 adapters, states,
+summaries, and validation images independently. It explicitly reuses each
+complete branch and rebuilds an incomplete one, while `--force` reruns DRaFT
+plus the final grid and metrics.
 
 AVIF and valid extensionless images are supported, including the current
 contents of `test_characters/`.

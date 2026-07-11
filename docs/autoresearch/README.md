@@ -1,5 +1,9 @@
 # Character-training autoresearch
 
+The next research phase targets reward-driven reference-expression copying;
+see [generalization.md](generalization.md) for the diagnosis, proposed losses,
+and ablation order.
+
 ## Objective
 
 Maximize mean antelopev2 identity similarity on held-out generations while
@@ -68,7 +72,8 @@ signatures make the dataset, SFT adapter, and completed variants resumable.
 | B1 | DRaFT batch size 2 | Rejected | Uses 18.9 GiB but improves sample throughput by only about 4.7%; LV is the stronger two-sample construction. |
 | S1 | Increase LV learning rate from 5e-5 to 1e-4 | Superseded | Improves both characters at every matched 20-step checkpoint through step 100; 2e-4 moves the frontier again. |
 | S2 | Increase LV learning rate from 1e-4 to 2e-4 | Quality option | Improves both characters through the 120-step budget boundary and gives maximum measured similarity. |
-| S3 | Increase LV learning rate from 2e-4 to 4e-4 | INT8 default | Step 20 is the selected default; step 40 extends the fast frontier, but Tommy regresses after step 40. |
+| S3 | Increase LV learning rate from 2e-4 to 4e-4 | Rejected qualitatively | Face-model scores rise quickly, but generated identity visibly overfits; Tommy also regresses after step 40. |
+| S4 | Select LV-60 at 5e-5 with train 12/eval 20 | Promoted qualitatively | Side-by-side review preferred this moderate LV profile over the more aggressive automatic-metric maxima. |
 
 Raw machine-readable curves live beside experiment artifacts; consolidated
 results and rejected variants will be added here as measurements complete.
@@ -120,11 +125,12 @@ above the old 80-update baseline. Julia and Tommy finish 44.1 and 23.0 seconds
 below the cap, leaving fewer than five Tommy updates and no useful room for a
 phase reallocation.
 
-The INT8 default is 4e-4/20: it reaches 0.5237 mean similarity in 371.1 seconds
-average. Extending it to step 40 reaches 0.6466 with 100% face detection in
-471.2 seconds average. Do not extend that rate past 40 updates: Tommy falls
-from 0.6278 at step 40 to 0.6206 at step 60. Use 2e-4/120 explicitly when
-maximum similarity is more important than training latency.
+The 4e-4 runs demonstrate reward overoptimization: the automated metric rises
+quickly, but qualitative identity fidelity degrades, and Tommy falls from
+0.6278 at step 40 to 0.6206 at step 60. The production INT8 default therefore
+uses the moderate LV-60 profile at 5e-5 with 12 training and 20 evaluation
+denoising steps. Higher-rate configurations remain research-only
+automatic-metric maxima, not recommended character-training defaults.
 
 The 20-step curve is monotonic through step 80 on the all-generation metric;
 Julia reaches 0.5785 at step 90, while Tommy's 90-step projection would exceed

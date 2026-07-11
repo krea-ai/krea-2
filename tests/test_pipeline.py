@@ -252,7 +252,7 @@ def test_training_commands_and_optional_trigger():
         assert "--cache-latents" in sft
         assert "--skip-final-sample" in sft
         assert draft[draft.index("--objective") + 1] == "draft"
-        assert draft[draft.index("--lr") + 1] == "0.0004"
+        assert draft[draft.index("--lr") + 1] == "5e-05"
         assert draft[draft.index("--steps") + 1] == "12"
         assert draft[draft.index("--draft-lv-samples") + 1] == "1"
         assert draft[draft.index("--validation-steps") + 1] == "20"
@@ -338,6 +338,8 @@ def test_cli_help():
     assert "--reward" in result.output
     assert "--face-model-dir" not in result.output
     assert "--regenerate-prompts" in result.output
+    assert "--draft-steps INTEGER" in result.output
+    assert "[default: 60;" in result.output
     face_result = CliRunner().invoke(face_pipeline.main, ["--help"])
     assert face_result.exit_code == 0, face_result.output
     assert "--face-model-dir" in face_result.output

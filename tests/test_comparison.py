@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from click.testing import CliRunner
 from PIL import Image
 
 from krea2.experiments import comparison as compare
@@ -30,6 +31,18 @@ class StateModel(nn.Module):
             device="cpu",
             quantization_type="rowwise",
         )
+
+
+def test_comparison_cli_baseline_defaults():
+    result = CliRunner().invoke(compare.main, ["--help"])
+    assert result.exit_code == 0, result.output
+    assert "SFT 500 + DRaFT-LV 60" in result.output
+    assert "--draft-steps INTEGER" in result.output
+    assert "--draft-lv-samples INTEGER" in result.output
+    assert "--denoising-steps INTEGER" in result.output
+    assert result.output.count("[default: 60;") >= 1
+    assert result.output.count("[default: 12;") >= 1
+    assert result.output.count("[default: 20;") >= 1
 
 
 def test_training_state_roundtrip():
@@ -147,7 +160,9 @@ def test_commands_and_heldout_prompts():
             sft_lr=1e-4,
             draft_lr=5e-5,
             draft_k=1,
+            draft_lv_samples=1,
             denoising_steps=20,
+            validation_steps=20,
             cfg=4.5,
             validation_size=8,
             seed=7,
@@ -157,6 +172,7 @@ def test_commands_and_heldout_prompts():
         assert "--validation-at-start" in shared_command
         assert "--validation-at-end" in shared_command
         assert draft_command[draft_command.index("--train-steps") + 1] == "50"
+        assert draft_command[draft_command.index("--draft-lv-samples") + 1] == "1"
         assert "--validation-at-start" not in draft_command
         assert draft_command[draft_command.index("--draft-image-every") + 1] == "0"
         assert continued_command[continued_command.index("--train-steps") + 1] == "500"
@@ -165,6 +181,8 @@ def test_commands_and_heldout_prompts():
         for command in commands:
             assert command[command.index("--validation-size") + 1] == "8"
             assert command[command.index("--validation-step") + 1] == "0"
+            assert command[command.index("--validation-steps") + 1] == "20"
+            assert command[command.index("--timing-warmup-steps") + 1] == "1"
             assert command[command.index("--validation-prompts") + 1] == str(
                 eval_prompts
             )

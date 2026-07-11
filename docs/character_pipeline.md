@@ -74,16 +74,16 @@ Face discovery and download are exclusive to face-specific commands.
 
 ## Defaults and outputs
 
-The short command uses 500 SFT steps followed by 20 DRaFT-LV updates, rank 32,
-batch size 1, 64 generated prompts, `draft_k=1`, one last-step LV perturbation,
-12 training denoising steps, a 4e-4 DRaFT learning rate, CFG 4.5, seed 42, and
+The short command uses 500 SFT steps followed by 60 DRaFT-LV updates, rank 32,
+batch size 1, 64 generated prompts, `draft_k=1`, one LV perturbation, 12
+training denoising steps, a 5e-5 DRaFT learning rate, CFG 4.5, seed 42, and
 ten fixed validation images generated with 20 steps. Use `--help` for controls
 such as step counts, validation, caption/prompt models, regeneration, and
 `--force`.
 
-To extend the fast setting, pass `--draft-steps 40`; do not extend 4e-4 beyond
-40 updates. For maximum measured similarity under 15 minutes, pass
-`--draft-steps 120 --draft-lr 0.0002`.
+Higher reward learning rates achieved larger automatic face-model scores, but
+visibly overfit identity in qualitative review. They remain available as
+explicit research overrides rather than production defaults.
 
 ```text
 runs/my_character/

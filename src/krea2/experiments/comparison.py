@@ -91,6 +91,7 @@ def common_training_args(
     validation_size: int,
     validation_seed: int,
     denoising_steps: int,
+    validation_steps: int,
     cfg: float,
 ) -> list[str]:
     return [
@@ -116,6 +117,8 @@ def common_training_args(
         str(validation_prompts),
         "--validation-seed",
         str(validation_seed),
+        "--validation-steps",
+        str(validation_steps),
         "--steps",
         str(denoising_steps),
         "--cfg",
@@ -127,6 +130,8 @@ def common_training_args(
         "--skip-final-sample",
         "--num-workers",
         "0",
+        "--timing-warmup-steps",
+        "1",
     ]
 
 
@@ -151,7 +156,9 @@ def build_experiment_commands(
     sft_lr: float,
     draft_lr: float,
     draft_k: int,
+    draft_lv_samples: int,
     denoising_steps: int,
+    validation_steps: int,
     cfg: float,
     validation_size: int,
     seed: int,
@@ -186,6 +193,7 @@ def build_experiment_commands(
             validation_size=validation_size,
             validation_seed=validation_seed,
             denoising_steps=denoising_steps,
+            validation_steps=validation_steps,
             cfg=cfg,
         ),
     ]
@@ -213,6 +221,8 @@ def build_experiment_commands(
         reward_init,
         "--draft-k",
         str(draft_k),
+        "--draft-lv-samples",
+        str(draft_lv_samples),
         "--draft-image-every",
         "0",
         "--output-dir",
@@ -229,6 +239,7 @@ def build_experiment_commands(
             validation_size=validation_size,
             validation_seed=validation_seed,
             denoising_steps=denoising_steps,
+            validation_steps=validation_steps,
             cfg=cfg,
         ),
     ]
@@ -260,6 +271,7 @@ def build_experiment_commands(
             validation_size=validation_size,
             validation_seed=validation_seed,
             denoising_steps=denoising_steps,
+            validation_steps=validation_steps,
             cfg=cfg,
         ),
     ]
@@ -349,7 +361,7 @@ def create_grid(
     sft_images: list[Path],
     output: Path,
     *,
-    hybrid_label: str = "SFT 500 +\nDRaFT-K 50",
+    hybrid_label: str = "SFT 500 +\nDRaFT-LV 60",
     sft_label: str = "SFT 1000",
 ) -> None:
     if len(draft_images) != len(sft_images):
@@ -510,7 +522,7 @@ def runtime_metadata() -> dict:
     }
 
 
-@click.command(help="Compare SFT 500 + DRaFT-K 50 against an exact SFT 1000 run.")
+@click.command(help="Compare SFT 500 + DRaFT-LV 60 against exact SFT 1000.")
 @click.argument(
     "images_dir", type=click.Path(exists=True, file_okay=False, path_type=Path)
 )
@@ -521,12 +533,14 @@ def runtime_metadata() -> dict:
 @click.option(
     "--shared-sft-steps", default=500, show_default=True, type=click.IntRange(1)
 )
-@click.option("--draft-steps", default=50, show_default=True, type=click.IntRange(1))
+@click.option("--draft-steps", default=60, show_default=True, type=click.IntRange(1))
 @click.option(
     "--total-sft-steps", default=1000, show_default=True, type=click.IntRange(2)
 )
 @click.option("--prompt-count", default=64, show_default=True, type=click.IntRange(1))
-@click.option("--validation-size", default=8, show_default=True, type=click.IntRange(1))
+@click.option(
+    "--validation-size", default=10, show_default=True, type=click.IntRange(1)
+)
 @click.option("--rank", default=32, show_default=True, type=click.Choice([32, 64]))
 @click.option("--batch-size", default=1, show_default=True, type=click.IntRange(1))
 @click.option(
@@ -543,10 +557,16 @@ def runtime_metadata() -> dict:
 )
 @click.option("--draft-k", default=1, show_default=True, type=click.IntRange(1))
 @click.option(
-    "--denoising-steps", default=20, show_default=True, type=click.IntRange(1)
+    "--draft-lv-samples", default=1, show_default=True, type=click.IntRange(0)
+)
+@click.option(
+    "--denoising-steps", default=12, show_default=True, type=click.IntRange(1)
+)
+@click.option(
+    "--validation-steps", default=20, show_default=True, type=click.IntRange(1)
 )
 @click.option("--cfg", default=4.5, show_default=True, type=float)
-@click.option("--seed", default=0, show_default=True, type=int)
+@click.option("--seed", default=42, show_default=True, type=int)
 @click.option(
     "--checkpoint",
     envvar="K2_CHECKPOINT",
@@ -565,6 +585,11 @@ def runtime_metadata() -> dict:
 )
 @click.option("--recaption", is_flag=True)
 @click.option("--regenerate-prompts", is_flag=True)
+@click.option(
+    "--reuse-sft-branches",
+    is_flag=True,
+    help="reuse complete shared-SFT and SFT-1000 outputs regardless of signature",
+)
 @click.option("--force", is_flag=True)
 def main(
     images_dir: Path,
@@ -580,7 +605,9 @@ def main(
     sft_lr: float,
     draft_lr: float,
     draft_k: int,
+    draft_lv_samples: int,
     denoising_steps: int,
+    validation_steps: int,
     cfg: float,
     seed: int,
     checkpoint: str,
@@ -589,12 +616,15 @@ def main(
     face_model_dir: Path | None,
     recaption: bool,
     regenerate_prompts: bool,
+    reuse_sft_branches: bool,
     force: bool,
 ) -> None:
     if total_sft_steps <= shared_sft_steps:
         raise click.ClickException("--total-sft-steps must exceed --shared-sft-steps")
     if draft_k > denoising_steps:
         raise click.ClickException("--draft-k cannot exceed --denoising-steps")
+    if draft_lv_samples and draft_k != 1:
+        raise click.ClickException("--draft-lv-samples requires --draft-k 1")
 
     images_dir = images_dir.expanduser().resolve()
     output_dir = output_dir.expanduser().resolve()
@@ -663,7 +693,9 @@ def main(
         sft_lr=sft_lr,
         draft_lr=draft_lr,
         draft_k=draft_k,
+        draft_lv_samples=draft_lv_samples,
         denoising_steps=denoising_steps,
+        validation_steps=validation_steps,
         cfg=cfg,
         validation_size=validation_size,
         seed=seed,
@@ -689,25 +721,39 @@ def main(
         base_checkpoint,
         *TRAINING_CODE,
     ]
-    shared_wall = run_stage(
-        "shared SFT",
-        shared_command,
-        output_dir=shared_dir,
-        expected=[
-            shared_dir / "lora_latest.safetensors",
-            shared_state,
-            shared_dir / "training_summary.json",
-            *expected_validation_images(
-                shared_dir / "validation" / "step_000000", validation_size
-            ),
-            *expected_validation_images(
-                shared_dir / "validation" / f"step_{shared_sft_steps:06d}",
-                validation_size,
-            ),
-        ],
-        dependencies=common_dependencies,
-        force=force,
-    )
+    shared_expected = [
+        shared_dir / "lora_latest.safetensors",
+        shared_state,
+        shared_dir / "training_summary.json",
+        *expected_validation_images(
+            shared_dir / "validation" / "step_000000", validation_size
+        ),
+        *expected_validation_images(
+            shared_dir / "validation" / f"step_{shared_sft_steps:06d}",
+            validation_size,
+        ),
+    ]
+    if reuse_sft_branches:
+        missing = [path for path in shared_expected if not path.is_file()]
+    else:
+        missing = shared_expected
+    if reuse_sft_branches and not missing:
+        click.echo(f"shared SFT: explicitly reusing {shared_dir}")
+        shared_wall = 0.0
+    else:
+        if reuse_sft_branches:
+            click.echo(
+                f"shared SFT: reusable output is incomplete; running stage "
+                f"(missing {missing[0]})"
+            )
+        shared_wall = run_stage(
+            "shared SFT",
+            shared_command,
+            output_dir=shared_dir,
+            expected=shared_expected,
+            dependencies=common_dependencies,
+            force=force,
+        )
     draft_wall = run_stage(
         "DRaFT-K branch",
         draft_command,
@@ -729,28 +775,41 @@ def main(
         ],
         force=force,
     )
-    continued_wall = run_stage(
-        "continued SFT branch",
-        continued_command,
-        output_dir=sft_dir,
-        expected=[
-            sft_dir / "lora_latest.safetensors",
-            final_state,
-            sft_dir / "training_summary.json",
-            *expected_validation_images(
-                sft_dir / "validation" / f"step_{total_sft_steps:06d}",
-                validation_size,
-            ),
-        ],
-        dependencies=[
-            shared_state,
-            dataset_csv,
-            evaluation_prompts,
-            base_checkpoint,
-            *TRAINING_CODE,
-        ],
-        force=force,
-    )
+    continued_expected = [
+        sft_dir / "lora_latest.safetensors",
+        final_state,
+        sft_dir / "training_summary.json",
+        *expected_validation_images(
+            sft_dir / "validation" / f"step_{total_sft_steps:06d}", validation_size
+        ),
+    ]
+    if reuse_sft_branches:
+        missing = [path for path in continued_expected if not path.is_file()]
+    else:
+        missing = continued_expected
+    if reuse_sft_branches and not missing:
+        click.echo(f"continued SFT branch: explicitly reusing {sft_dir}")
+        continued_wall = 0.0
+    else:
+        if reuse_sft_branches:
+            click.echo(
+                f"continued SFT branch: reusable output is incomplete; running stage "
+                f"(missing {missing[0]})"
+            )
+        continued_wall = run_stage(
+            "continued SFT branch",
+            continued_command,
+            output_dir=sft_dir,
+            expected=continued_expected,
+            dependencies=[
+                shared_state,
+                dataset_csv,
+                evaluation_prompts,
+                base_checkpoint,
+                *TRAINING_CODE,
+            ],
+            force=force,
+        )
 
     image_sets = {
         "base": validation_images(
@@ -772,7 +831,10 @@ def main(
         image_sets["sft_plus_draft"],
         image_sets["total_sft"],
         grid_path,
-        hybrid_label=f"SFT {shared_sft_steps} +\nDRaFT-K {draft_steps}",
+        hybrid_label=(
+            f"SFT {shared_sft_steps} +\n"
+            f"DRaFT-{'LV' if draft_lv_samples else 'K'} {draft_steps}"
+        ),
         sft_label=f"SFT {total_sft_steps}",
     )
 
