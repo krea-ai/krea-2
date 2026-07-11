@@ -38,7 +38,7 @@ uv sync --extra train --extra face-reward
 
 Use `uv sync --extra train --extra face-reward --extra dev` for a complete
 development environment. PyTorch and torchvision intentionally have no version
-constraints: `uv sync` resolves the newest compatible CUDA 12.8 builds
+constraints: `uv sync` resolves the newest compatible CUDA 13.0 builds
 available from the configured PyTorch index instead of pinning a release.
 
 Both [Raw](https://huggingface.co/krea/Krea-2-Raw) and [Turbo](https://huggingface.co/krea/Krea-2-Turbo) safetensor files are available on Hugging Face. After downloading the checkpoints, set the `OSS_RAW` and `OSS_TURBO` environment variables to the paths of the downloaded files.
@@ -118,6 +118,10 @@ uv run --extra train main.py IMAGES \
 
 The generic pipeline never imports face-specific dependencies. Low-level SFT,
 DRaFT-K, and flow-matching runs are available through `scripts/train.py`.
+The face pipeline defaults to the measured character-training configuration:
+500 SFT updates followed by 120 DRaFT-LV updates with a 12-step training
+sampler and 2e-4 DRaFT learning rate. Validation remains fixed at 20 steps,
+ten images, and seed 42.
 
 
 ## Documentation

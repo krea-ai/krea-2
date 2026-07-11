@@ -293,7 +293,7 @@ def _save_interval(train_steps: int) -> int:
 def _common_training_args(
     config: TrainingConfig, *, train_steps: int, lr: float, seed: int
 ) -> list[str]:
-    return [
+    args = [
         "--rank",
         str(config.rank),
         "--train-steps",
@@ -312,11 +312,16 @@ def _common_training_args(
         str(config.validation_step),
         "--validation-size",
         str(config.validation_size),
+        "--validation-steps",
+        str(config.validation_steps),
         "--quantization-type",
         "rowwise",
         "--compile-mode",
         "default",
     ]
+    if config.validation_step > 0:
+        args.append("--validation-at-end")
+    return args
 
 
 def build_training_commands(config: TrainingConfig) -> tuple[list[str], list[str]]:
@@ -361,6 +366,8 @@ def build_training_commands(config: TrainingConfig) -> tuple[list[str], list[str
         reward_init,
         "--draft-k",
         str(config.draft_k),
+        "--draft-lv-samples",
+        str(config.draft_lv_samples),
         "--steps",
         str(config.denoising_steps),
         "--cfg",
@@ -510,6 +517,8 @@ def run_pipeline(config: PipelineConfig, reward: RewardSpec) -> Path:
         )
     if config.draft_k > config.denoising_steps:
         raise click.ClickException("--draft-k cannot exceed --denoising-steps")
+    if config.draft_lv_samples and config.draft_k != 1:
+        raise click.ClickException("--draft-lv-samples requires --draft-k 1")
     click.echo(f"found {len(images)} reference images")
 
     data_dir = output_dir / "data"
@@ -558,7 +567,9 @@ def run_pipeline(config: PipelineConfig, reward: RewardSpec) -> Path:
         sft_lr=config.sft_lr,
         draft_lr=config.draft_lr,
         draft_k=config.draft_k,
+        draft_lv_samples=config.draft_lv_samples,
         denoising_steps=config.denoising_steps,
+        validation_steps=config.validation_steps,
         cfg=config.cfg,
         validation_step=config.validation_step,
         validation_size=config.validation_size,
@@ -640,7 +651,7 @@ def pipeline_options(command):
             "--sft-steps", default=500, show_default=True, type=click.IntRange(1)
         ),
         click.option(
-            "--draft-steps", default=100, show_default=True, type=click.IntRange(1)
+            "--draft-steps", default=120, show_default=True, type=click.IntRange(1)
         ),
         click.option(
             "--prompt-count", default=64, show_default=True, type=click.IntRange(1)
@@ -659,22 +670,31 @@ def pipeline_options(command):
         ),
         click.option(
             "--draft-lr",
-            default=5e-5,
+            default=2e-4,
             show_default=True,
             type=click.FloatRange(min=0, min_open=True),
         ),
         click.option("--draft-k", default=1, show_default=True, type=click.IntRange(1)),
         click.option(
-            "--denoising-steps", default=20, show_default=True, type=click.IntRange(1)
+            "--draft-lv-samples",
+            default=1,
+            show_default=True,
+            type=click.IntRange(0),
+        ),
+        click.option(
+            "--denoising-steps", default=12, show_default=True, type=click.IntRange(1)
+        ),
+        click.option(
+            "--validation-steps", default=20, show_default=True, type=click.IntRange(1)
         ),
         click.option("--cfg", default=4.5, show_default=True, type=float),
         click.option(
             "--validation-step", default=100, show_default=True, type=click.IntRange(0)
         ),
         click.option(
-            "--validation-size", default=4, show_default=True, type=click.IntRange(1)
+            "--validation-size", default=10, show_default=True, type=click.IntRange(1)
         ),
-        click.option("--seed", default=0, show_default=True, type=int),
+        click.option("--seed", default=42, show_default=True, type=int),
         click.option(
             "--checkpoint",
             envvar="K2_CHECKPOINT",

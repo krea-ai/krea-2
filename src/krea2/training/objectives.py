@@ -97,14 +97,48 @@ def encode_latents(ae, images: torch.Tensor) -> torch.Tensor:
     return rearrange(z, "b c 1 h w -> b c h w")
 
 
-def decode_latents_checkpointed(ae, latents: torch.Tensor) -> torch.Tensor:
+def decode_latents_checkpointed(
+    ae, latents: torch.Tensor, *, use_checkpoint: bool = True
+) -> torch.Tensor:
     def run(z):
         return ae.decode(z.to(torch.bfloat16))
 
-    return checkpoint(run, latents, use_reentrant=False, preserve_rng_state=False)
+    if use_checkpoint:
+        return checkpoint(run, latents, use_reentrant=False, preserve_rng_state=False)
+    return run(latents)
 
 
-def cfg_velocity(model, img, txt, txt_mask, untxt, un_mask, t, pos, unpos, guidance):
+def cfg_velocity(
+    model,
+    img,
+    txt,
+    txt_mask,
+    untxt,
+    un_mask,
+    t,
+    pos,
+    unpos,
+    guidance,
+    *,
+    fuse_no_grad=False,
+):
+    if (
+        fuse_no_grad
+        and guidance > 0
+        and not torch.is_grad_enabled()
+        and txt.shape[1:] == untxt.shape[1:]
+        and txt_mask.shape[1:] == un_mask.shape[1:]
+        and pos.shape[1:] == unpos.shape[1:]
+    ):
+        both = model(
+            img=torch.cat((img, img), dim=0),
+            context=torch.cat((txt, untxt), dim=0),
+            t=torch.cat((t, t), dim=0),
+            pos=torch.cat((pos, unpos), dim=0),
+            mask=torch.cat((txt_mask, un_mask), dim=0),
+        )
+        cond, uncond = both.chunk(2, dim=0)
+        return cond + guidance * (cond - uncond)
     cond = model(img=img, context=txt, t=t, pos=pos, mask=txt_mask)
     if guidance <= 0:
         return cond
@@ -130,6 +164,9 @@ def draft_sample_images(
     y2: float,
     mu: float | None,
     high_noise_shift: float = 0.5,
+    fuse_no_grad_cfg: bool = False,
+    checkpoint_vae: bool = True,
+    lv_samples: int = 0,
 ):
     device = next(model.parameters()).device
     dtype = torch.bfloat16
@@ -184,7 +221,17 @@ def draft_sample_images(
         if i < grad_start:
             with torch.no_grad():
                 v = cfg_velocity(
-                    model, img, txt, mask, untxt, unmask, t, pos, unpos, guidance
+                    model,
+                    img,
+                    txt,
+                    mask,
+                    untxt,
+                    unmask,
+                    t,
+                    pos,
+                    unpos,
+                    guidance,
+                    fuse_no_grad=fuse_no_grad_cfg,
                 )
                 img = (img + delta * v).detach()
         else:
@@ -193,8 +240,43 @@ def draft_sample_images(
             )
             img = img + delta * v
 
-    latents = unpatchify_latents(img, height=latent_h, width=latent_w, patch=patch)
-    return decode_latents_checkpointed(ae, latents).clamp(-1, 1)
+    outputs = [img]
+    if lv_samples:
+        last_t = float(ts[-2])
+        t = torch.full((len(img),), last_t, dtype=img.dtype, device=img.device)
+        for _ in range(lv_samples):
+            noise = torch.randn(
+                img.shape,
+                device=img.device,
+                dtype=img.dtype,
+                generator=gen,
+            )
+            noised = last_t * noise + (1.0 - last_t) * img.detach()
+            velocity = cfg_velocity(
+                model,
+                noised,
+                txt,
+                mask,
+                untxt,
+                unmask,
+                t,
+                pos,
+                unpos,
+                guidance,
+            )
+            outputs.append(noised - last_t * velocity)
+
+    decoded = []
+    for tokens in outputs:
+        latents = unpatchify_latents(
+            tokens, height=latent_h, width=latent_w, patch=patch
+        )
+        decoded.append(
+            decode_latents_checkpointed(
+                ae, latents, use_checkpoint=checkpoint_vae
+            ).clamp(-1, 1)
+        )
+    return torch.cat(decoded, dim=0)
 
 
 def reward_loss(reward, images, prompts: list[str], reward_kwargs: dict):

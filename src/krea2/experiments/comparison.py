@@ -405,6 +405,7 @@ def score_image_set(
 ) -> tuple[dict, list[dict]]:
     rows = []
     detected_scores = []
+    all_scores = []
     reward_values = []
     for index, path in enumerate(paths):
         tensor = image_tensor(path, reward.device)
@@ -421,6 +422,7 @@ def score_image_set(
                 embeddings = reward.encode_faces(torch.cat(crops, dim=0))
                 identity = float(reward.identity_scores(embeddings).max().item())
             detected_scores.append(identity)
+        all_scores.append(0.0 if identity is None else identity)
         with torch.no_grad():
             training_reward = float(reward(tensor.unsqueeze(0)).item())
         reward_values.append(training_reward)
@@ -451,6 +453,8 @@ def score_image_set(
         "images": len(paths),
         "face_detection_rate": len(detected_scores) / max(len(paths), 1),
         "identity_similarity": stats(detected_scores),
+        "identity_similarity_all": stats(all_scores),
+        "mean_face_similarity": sum(all_scores) / max(len(all_scores), 1),
         "training_reward": stats(reward_values),
     }
     return summary, rows

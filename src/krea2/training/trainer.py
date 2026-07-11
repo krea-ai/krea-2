@@ -158,19 +158,30 @@ def save_training_summary(
     initial_step: int,
     final_step: int,
     step_times: list[float],
+    timing_warmup_steps: int = 0,
+    peak_cuda_memory_bytes: int | None = None,
 ) -> Path:
-    total = sum(step_times)
+    timing_warmup_steps = min(
+        max(int(timing_warmup_steps), 0), max(len(step_times) - 1, 0)
+    )
+    measured = step_times[timing_warmup_steps:]
+    total = sum(measured)
     summary = {
         "objective": objective,
         "initial_step": initial_step,
         "final_step": final_step,
         "updates": len(step_times),
+        "timed_updates": len(measured),
+        "timing_warmup_steps": timing_warmup_steps,
         "optimization_seconds": total,
-        "steps_per_second": len(step_times) / max(total, 1e-12),
+        "total_step_seconds": sum(step_times),
+        "steps_per_second": len(measured) / max(total, 1e-12),
+        "step_times_seconds": step_times,
+        "peak_cuda_memory_bytes": peak_cuda_memory_bytes,
         "latency_seconds": {
-            "p20": _percentile(step_times, 0.2),
-            "median": _percentile(step_times, 0.5),
-            "p80": _percentile(step_times, 0.8),
+            "p20": _percentile(measured, 0.2),
+            "median": _percentile(measured, 0.5),
+            "p80": _percentile(measured, 0.8),
         },
     }
     path = output_dir / "training_summary.json"
@@ -259,6 +270,12 @@ def save_final_sample(
     help="number of fixed random validation prompts/images",
 )
 @click.option(
+    "--validation-steps",
+    default=None,
+    type=click.IntRange(1),
+    help="validation denoising steps; defaults to --steps",
+)
+@click.option(
     "--validation-at-start",
     is_flag=True,
     default=False,
@@ -297,6 +314,30 @@ def save_final_sample(
 @click.option("--lora-scale", default=1.0, show_default=True, type=float)
 @click.option("--draft-k", default=1, show_default=True, type=int)
 @click.option(
+    "--draft-lv-samples",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0),
+    help="additional re-noised one-step reward gradients for DRaFT-LV",
+)
+@click.option(
+    "--fuse-no-grad-cfg",
+    is_flag=True,
+    help="batch detached conditional/unconditional DRaFT CFG model calls",
+)
+@click.option(
+    "--checkpoint-dit/--no-checkpoint-dit",
+    default=True,
+    show_default=True,
+    help="activation-checkpoint DiT blocks during training",
+)
+@click.option(
+    "--checkpoint-vae/--no-checkpoint-vae",
+    default=True,
+    show_default=True,
+    help="activation-checkpoint the differentiable DRaFT VAE decode",
+)
+@click.option(
     "--draft-image-every",
     default=1,
     show_default=True,
@@ -315,6 +356,13 @@ def save_final_sample(
 @click.option("--skip-final-sample", is_flag=True, default=False)
 @click.option("--save-every", default=100, show_default=True)
 @click.option("--log-every", default=10, show_default=True, type=int)
+@click.option(
+    "--timing-warmup-steps",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0),
+    help="exclude the first N update latencies from reported optimization time",
+)
 @click.option("--output-dir", default="draft_int8_lora", show_default=True)
 @click.option("--resume-lora", default=None, type=click.Path(exists=True))
 @click.option(
@@ -370,6 +418,7 @@ def main(
     validation_prompts,
     validation_step,
     validation_size,
+    validation_steps,
     validation_at_start,
     validation_at_end,
     validation_seed,
@@ -382,6 +431,10 @@ def main(
     lora_alpha,
     lora_scale,
     draft_k,
+    draft_lv_samples,
+    fuse_no_grad_cfg,
+    checkpoint_dit,
+    checkpoint_vae,
     draft_image_every,
     steps,
     cfg,
@@ -395,6 +448,7 @@ def main(
     skip_final_sample,
     save_every,
     log_every,
+    timing_warmup_steps,
     output_dir,
     resume_lora,
     save_training_state,
@@ -438,10 +492,13 @@ def main(
         raise click.ClickException("--train-steps must be positive")
     if steps <= 0:
         raise click.ClickException("--steps must be positive")
+    validation_steps = steps if validation_steps is None else validation_steps
     if batch_size <= 0:
         raise click.ClickException("--batch-size must be positive")
     if objective == "draft" and not 1 <= draft_k <= steps:
         raise click.ClickException("--draft-k must be between 1 and --steps")
+    if draft_lv_samples and (objective != "draft" or draft_k != 1):
+        raise click.ClickException("--draft-lv-samples requires DRaFT with --draft-k 1")
     if draft_image_every < 0:
         raise click.ClickException("--draft-image-every must be non-negative")
     if resume_lora is not None and resume_training_state is not None:
@@ -491,7 +548,8 @@ def main(
         load_lora_state_tensors(model, resume_state["lora"], strict=True)
     if compile_mode != "none":
         compile_training_blocks(model)
-    apply_block_checkpointing(model)
+    if checkpoint_dit:
+        apply_block_checkpointing(model)
     params = list(lora_parameters(model))
     if not params:
         raise click.ClickException("no INT8 linears were converted to LoRA")
@@ -665,9 +723,15 @@ def main(
         "flow_convention": "krea_t1_noise_t0_data",
         "quantization_type": quantization_type,
         "compile_mode": compile_mode,
+        "lr": str(lr),
+        "draft_k": str(draft_k),
+        "draft_lv_samples": str(draft_lv_samples),
+        "denoising_steps": str(steps),
+        "cfg": str(cfg),
         "high_noise_shift": str(high_noise_shift),
         "validation_step": str(validation_step),
         "validation_size": str(validation_size),
+        "validation_steps": str(validation_steps),
         "validation_seed": str(validation_seed),
         "validation_at_start": str(validation_at_start),
         "validation_at_end": str(validation_at_end),
@@ -698,7 +762,7 @@ def main(
             fixed_validation_prompts,
             output_dir=output_dir,
             step=initial_step,
-            steps=steps,
+            steps=validation_steps,
             cfg=cfg,
             seed=validation_seed,
             y1=y1,
@@ -718,6 +782,8 @@ def main(
     last_saved_step = None
     last_saved_path = None
     step_times = []
+    if train_device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(train_device)
     with click.progressbar(range(1, train_steps + 1), label="training") as bar:
         for local_step in bar:
             step = initial_step + local_step
@@ -765,11 +831,15 @@ def main(
                     y2=y2,
                     mu=mu,
                     high_noise_shift=high_noise_shift,
+                    fuse_no_grad_cfg=fuse_no_grad_cfg,
+                    checkpoint_vae=checkpoint_vae,
+                    lv_samples=draft_lv_samples,
                 )
+                reward_prompts = prompt_list * (draft_lv_samples + 1)
                 if draft_image_every > 0 and step % draft_image_every == 0:
-                    save_draft_step_images(out_images, prompt_list, output_dir, step)
+                    save_draft_step_images(out_images, reward_prompts, output_dir, step)
                 loss, rewards = reward_loss(
-                    reward_obj, out_images, prompt_list, reward_kw
+                    reward_obj, out_images, reward_prompts, reward_kw
                 )
             elif cached_sft:
                 loss = cached_flow_loss(
@@ -833,7 +903,7 @@ def main(
                     fixed_validation_prompts,
                     output_dir=output_dir,
                     step=step,
-                    steps=steps,
+                    steps=validation_steps,
                     cfg=cfg,
                     seed=validation_seed,
                     y1=y1,
@@ -856,6 +926,12 @@ def main(
         initial_step=initial_step,
         final_step=final_step,
         step_times=step_times,
+        timing_warmup_steps=timing_warmup_steps,
+        peak_cuda_memory_bytes=(
+            torch.cuda.max_memory_allocated(train_device)
+            if train_device.type == "cuda"
+            else None
+        ),
     )
     click.echo(f"saved {summary_path}")
 
@@ -882,7 +958,7 @@ def main(
             fixed_validation_prompts,
             output_dir=output_dir,
             step=final_step,
-            steps=steps,
+            steps=validation_steps,
             cfg=cfg,
             seed=validation_seed,
             y1=y1,

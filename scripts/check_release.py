@@ -21,6 +21,8 @@ CLI_FILES = (
     ROOT / "scripts" / "generate_character_prompts_deepinfra.py",
     ROOT / "scripts" / "convert_images_to_jpg.py",
     ROOT / "scripts" / "convert_lora_to_comfyui.py",
+    ROOT / "scripts" / "autoresearch.py",
+    ROOT / "scripts" / "evaluate_autoresearch.py",
 )
 PACKAGE_IMPORTS = (
     "krea2.models.transformer",
@@ -31,6 +33,7 @@ PACKAGE_IMPORTS = (
     "krea2.training.trainer",
     "krea2.training.pipeline",
     "krea2.experiments.comparison",
+    "krea2.experiments.autoresearch",
 )
 
 

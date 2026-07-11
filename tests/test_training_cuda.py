@@ -439,6 +439,32 @@ def test_cfg_grad_branch():
     print("ok  CFG keeps gradients on conditional branch only")
 
 
+def test_cfg_fuses_detached_branches():
+    model = ToyModel()
+    img = torch.ones(1, 4, 8, device=DEV)
+    txt = torch.zeros(1, 2, 8, device=DEV)
+    untxt = torch.ones_like(txt)
+    mask = torch.ones(1, 6, device=DEV, dtype=torch.bool)
+    t = torch.ones(1, device=DEV)
+    pos = torch.zeros(1, 6, 3, device=DEV)
+    with torch.no_grad():
+        fused = cfg_velocity(
+            model,
+            img,
+            txt,
+            mask,
+            untxt,
+            mask,
+            t,
+            pos,
+            pos,
+            3.5,
+            fuse_no_grad=True,
+        )
+    assert model.grad_flags == [False]
+    assert fused.shape == img.shape
+
+
 def test_dataset_smoke():
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
@@ -814,6 +840,26 @@ def test_reward_loader_init_kwargs():
     print("ok  reward constructor kwargs are applied")
 
 
+def test_training_summary_excludes_warmup_latency():
+    with tempfile.TemporaryDirectory() as td:
+        path = trainer.save_training_summary(
+            Path(td),
+            objective="draft",
+            initial_step=0,
+            final_step=4,
+            step_times=[9.0, 1.0, 2.0, 3.0],
+            timing_warmup_steps=1,
+        )
+        import json
+
+        summary = json.loads(path.read_text())
+        assert summary["optimization_seconds"] == 6.0
+        assert summary["total_step_seconds"] == 15.0
+        assert summary["timed_updates"] == 3
+        assert summary["steps_per_second"] == 0.5
+        assert summary["step_times_seconds"] == [9.0, 1.0, 2.0, 3.0]
+
+
 class SampleModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -1001,11 +1047,18 @@ def test_face_similarity_reward():
     )
     assert metric_summary["face_detection_rate"] == 1.0
     assert metric_summary["identity_similarity"]["mean"] > 0.0
+    assert (
+        metric_summary["mean_face_similarity"]
+        == metric_summary["identity_similarity_all"]["mean"]
+    )
     assert metric_rows[0]["detected"]
 
     with tempfile.TemporaryDirectory() as td:
         blank_path = Path(td) / "blank.png"
         Image.new("RGB", (512, 512), color=(0, 0, 0)).save(blank_path)
+        blank_summary, _ = score_image_set("blank", [blank_path], reward)
+        assert blank_summary["face_detection_rate"] == 0.0
+        assert blank_summary["mean_face_similarity"] == 0.0
         try:
             FaceSimilarityReward(
                 reference_images=td,

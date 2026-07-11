@@ -47,6 +47,8 @@ normally from `krea2.kernels` and coexist with the upstream Triton runtime.
 | `train_face.py` | The same pipeline with face-model management and face reward. |
 | `scripts/train.py` | Direct SFT, DRaFT-K, or flow-matching trainer. |
 | `scripts/compare.py` | Controlled hybrid-versus-SFT character experiment. |
+| `scripts/autoresearch.py` | Fixed-protocol character-training learning curves. |
+| `scripts/evaluate_autoresearch.py` | Seed-42, ten-prompt adapter evaluation. |
 | `scripts/inference*.py` | BF16, FP8, and INT8 image generation. |
 | `scripts/caption_images_deepinfra.py` | Standalone caption adapter. |
 | `scripts/generate_character_prompts_deepinfra.py` | Standalone prompt adapter. |
@@ -66,7 +68,7 @@ compatibility metadata. `--resume-training-state` restores the entire state;
 
 The base install supports inference. `train` adds torchvision, `face-reward`
 adds face and ONNX dependencies, and `dev` adds pytest and Ruff. Torch packages
-are unconstrained and resolve to the latest compatible CUDA 12.8 builds; the
+are unconstrained and resolve to the latest compatible CUDA 13.0 builds; the
 lockfile is a reproducible environment snapshot, not a source constraint.
 
 ## Release gate

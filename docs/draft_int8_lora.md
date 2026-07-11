@@ -44,17 +44,29 @@ uv run --extra train --extra face-reward scripts/train.py \
   --prompts ../test_images/generated_prompts.txt \
   --validation-prompts ../test_images/generated_prompts.txt \
   --validation-step 100 \
-  --validation-size 4 \
+  --validation-size 10 \
+  --validation-steps 20 \
   --trigger-word "triggerword" \
   --resume-lora runs/character_sft/lora_latest.safetensors \
   --reward krea2.rewards.face:FaceSimilarityReward \
   --reward-init-kwargs '{"reference_images":"../test_images","model_dir":"../antelopev2"}' \
   --rank 32 \
   --draft-k 1 \
-  --steps 28 \
+  --draft-lv-samples 1 \
+  --steps 12 \
+  --train-steps 120 \
+  --lr 0.0002 \
+  --seed 43 \
   --cfg 4.5 \
   --output-dir runs/reward_lora
 ```
+
+`--draft-lv-samples 1` implements the lower-variance DRaFT-LV construction:
+the final generated latent is detached, re-noised at the last integration
+time, and passed through one additional differentiable denoising step. The
+original and perturbed rewards are averaged. LV currently requires
+`--draft-k 1`. Keep `--validation-steps 20` separate from the shorter training
+sampler when comparing adapters.
 
 The reward object is loaded from `module:object`. If the object is a class it is
 constructed with `--reward-init-kwargs`. During training it is called as:
@@ -128,8 +140,13 @@ that encoder.
 
 Generation also reuses fixed per-image seeds and the training high-noise
 schedule. Images are generated one at a time to keep peak validation VRAM
-independent of `--validation-size`. Each checkpoint directory contains an
-image and prompt sidecar for every fixed item:
+independent of `--validation-size`. By default validation uses the training
+`--steps` value. Set
+`--validation-steps` to hold evaluation quality constant while researching a
+different DRaFT training sampler length.
+
+Each checkpoint directory contains an image and prompt sidecar for every fixed
+item:
 
 ```text
 validation/step_000000/image_000.png

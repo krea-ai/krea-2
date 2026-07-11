@@ -252,8 +252,10 @@ def test_training_commands_and_optional_trigger():
         assert "--cache-latents" in sft
         assert "--skip-final-sample" in sft
         assert draft[draft.index("--objective") + 1] == "draft"
-        assert draft[draft.index("--lr") + 1] == "5e-05"
-        assert draft[draft.index("--steps") + 1] == "20"
+        assert draft[draft.index("--lr") + 1] == "0.0002"
+        assert draft[draft.index("--steps") + 1] == "12"
+        assert draft[draft.index("--draft-lv-samples") + 1] == "1"
+        assert draft[draft.index("--validation-steps") + 1] == "20"
         assert draft[draft.index("--resume-lora") + 1] == str(
             root / "sft" / "lora_latest.safetensors"
         )

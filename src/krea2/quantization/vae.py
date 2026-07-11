@@ -62,7 +62,9 @@ class LeanRMSNorm(QwenImageRMS_norm):
         # F.normalize(x.float()) semantics with an on-the-fly fp32 reduction:
         # only the (B, 1, ...) norm is fp32, the full map never leaves bf16.
         norm = torch.linalg.vector_norm(x, dim=dim, keepdim=True, dtype=torch.float32)
-        mult = (self.scale / norm.clamp_min_(1e-12)).to(x.dtype)
+        # Keep the reduction output intact for autograd. The in-place clamp
+        # only appeared safe while activation checkpointing recomputed it.
+        mult = (self.scale / norm.clamp_min(1e-12)).to(x.dtype)
         return x * mult * self.gamma + self.bias
 
 
