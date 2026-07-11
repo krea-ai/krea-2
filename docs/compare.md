@@ -16,8 +16,9 @@ uv run --extra train --extra face-reward scripts/compare.py \
 
 The trigger word is optional. The default experiment uses rank 32, batch size
 1, 64 DRaFT training prompts, ten held-out evaluation prompts, one LV sample,
-a 12-step training sampler, 20-step evaluation, DRaFT LR 5e-5, CFG 4.5, and
-seed 42.
+a 12-step training sampler, 20-step evaluation, DRaFT LR 1e-4, CFG 4.5, and
+seed 42. DRaFT optimizes QKVO LoRAs only. Every fourth update uses an
+independent trajectory pair in place of the correlated LV auxiliary sample.
 
 ## Fairness contract
 
@@ -27,6 +28,8 @@ seed 42.
   RNG, the cached SFT tensors, and the exact shuffled-data cursor.
 - DRaFT-LV starts from the same step-500 LoRA but intentionally uses a fresh
   AdamW optimizer.
+- Frozen attention-gate and MLP LoRAs retain their exact SFT-500 values and are
+  still present in the final adapter.
 - The ten evaluation prompts are excluded from DRaFT training.
 - Every evaluation uses the same effective prompts, ordering, image seeds,
   resolution, sampler settings, and empty negative prompt.
@@ -75,7 +78,10 @@ on the second. Individual images and prompt sidecars remain available.
 `experiment_results.json` reports synchronized optimization time, stage wall
 time, latency percentiles, throughput, face-detection rate, detected-face
 identity similarity, and the fallback-aware training reward. `metrics.csv`
-contains per-image values.
+contains per-image values. It also reports nearest-reference similarity, the
+nearest-versus-centroid gap, reference-assignment entropy, and maximum
+assignment probability so automatic evaluation can expose reference-view
+collapse that centroid identity alone misses.
 
 Every training stage has a command/dependency signature. Re-running the same
 command reuses complete stages; `--force` runs all three again. Training-state

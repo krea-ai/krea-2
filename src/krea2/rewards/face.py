@@ -9,6 +9,7 @@ images.
 from __future__ import annotations
 
 import math
+import re
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,14 @@ ARCFACE_DST = np.array(
         [70.7299, 92.2041],
     ],
     dtype=np.float32,
+)
+
+EXPRESSION_PROMPT_RE = re.compile(
+    r"\b(?:expression|smil(?:e|es|ing)|grin(?:s|ning)?|laugh(?:s|ing)?|"
+    r"surpris(?:ed|e)|frown(?:s|ing)?|"
+    r"eyes?\s+(?:open|closed)|closed[- ]eyes?|gaze|looking\s+(?:away|aside)|"
+    r"raised eyebrows?)\b",
+    re.I,
 )
 
 
@@ -292,8 +301,16 @@ class FaceSimilarityReward(nn.Module):
         no_face_reward: float | None = None,
         no_face_penalty: float = 0.5,
         reference_face_policy: str = "largest",
-        nearest_reference_weight: float = 0.25,
+        nearest_reference_weight: float = 0.0,
         nearest_temperature: float = 0.07,
+        target_similarity: float = 0.45,
+        saturation_temperature: float = 0.05,
+        reference_entropy_weight: float = 0.02,
+        reference_entropy_temperature: float = 0.10,
+        eot_views: int = 2,
+        reference_eot_views: int = 4,
+        expression_diversity_weight: float = 0.05,
+        expression_diversity_margin: float = 0.15,
         duplicate_identity_weight: float = 0.25,
         duplicate_identity_threshold: float = 0.35,
         device: str | torch.device | None = None,
@@ -314,6 +331,14 @@ class FaceSimilarityReward(nn.Module):
         self.reference_face_policy = reference_face_policy
         self.nearest_reference_weight = float(nearest_reference_weight)
         self.nearest_temperature = float(nearest_temperature)
+        self.target_similarity = float(target_similarity)
+        self.saturation_temperature = float(saturation_temperature)
+        self.reference_entropy_weight = float(reference_entropy_weight)
+        self.reference_entropy_temperature = float(reference_entropy_temperature)
+        self.eot_views = int(eot_views)
+        self.reference_eot_views = int(reference_eot_views)
+        self.expression_diversity_weight = float(expression_diversity_weight)
+        self.expression_diversity_margin = float(expression_diversity_margin)
         self.duplicate_identity_weight = float(duplicate_identity_weight)
         self.duplicate_identity_threshold = float(duplicate_identity_threshold)
         self.device = torch.device(
@@ -331,6 +356,27 @@ class FaceSimilarityReward(nn.Module):
             raise ValueError("nearest_reference_weight must be in [0, 1]")
         if self.nearest_temperature <= 0.0:
             raise ValueError("nearest_temperature must be positive")
+        if self.nearest_reference_weight:
+            warnings.warn(
+                "nearest_reference_weight is deprecated; the training reward uses "
+                "a saturated centroid and anti-copy entropy instead",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if not -1.0 <= self.target_similarity <= 1.0:
+            raise ValueError("target_similarity must be in [-1, 1]")
+        if self.saturation_temperature <= 0.0:
+            raise ValueError("saturation_temperature must be positive")
+        if self.reference_entropy_weight < 0.0:
+            raise ValueError("reference_entropy_weight must be non-negative")
+        if self.reference_entropy_temperature <= 0.0:
+            raise ValueError("reference_entropy_temperature must be positive")
+        if self.eot_views <= 0 or self.reference_eot_views <= 0:
+            raise ValueError("EOT view counts must be positive")
+        if self.expression_diversity_weight < 0.0:
+            raise ValueError("expression_diversity_weight must be non-negative")
+        if self.expression_diversity_margin < 0.0:
+            raise ValueError("expression_diversity_margin must be non-negative")
 
         detection_path = self.model_dir / "detection" / "model.onnx"
         recognition_path = self.model_dir / "recognition" / "model.onnx"
@@ -391,6 +437,132 @@ class FaceSimilarityReward(nn.Module):
         embeddings = self.recognition(crops.to(self.device).float())
         return F.normalize(embeddings.float(), dim=-1)
 
+    @staticmethod
+    def _random_values(
+        count: int,
+        crops: torch.Tensor,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        return torch.rand(
+            count,
+            device=crops.device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+
+    def _augment_aligned_view(
+        self,
+        crops: torch.Tensor,
+        *,
+        generator: torch.Generator | None = None,
+        force_flip: bool | None = None,
+    ) -> torch.Tensor:
+        """Apply weak differentiable identity-preserving crop transforms."""
+        batch = crops.shape[0]
+        values = self._random_values(batch * 9, crops, generator=generator).reshape(
+            batch, 9
+        )
+        angle = (values[:, 0] * 2.0 - 1.0) * math.radians(5.0)
+        scale = 0.94 + values[:, 1] * 0.12
+        tx = (values[:, 2] * 2.0 - 1.0) * 0.05
+        ty = (values[:, 3] * 2.0 - 1.0) * 0.05
+        cos = torch.cos(angle) / scale
+        sin = torch.sin(angle) / scale
+        theta = torch.zeros(batch, 2, 3, device=crops.device, dtype=torch.float32)
+        theta[:, 0, 0] = cos
+        theta[:, 0, 1] = -sin
+        theta[:, 1, 0] = sin
+        theta[:, 1, 1] = cos
+        theta[:, 0, 2] = tx
+        theta[:, 1, 2] = ty
+        grid = F.affine_grid(theta, crops.shape, align_corners=False)
+        view = F.grid_sample(
+            crops.float(),
+            grid,
+            mode="bilinear",
+            padding_mode="reflection",
+            align_corners=False,
+        )
+
+        if force_flip is None:
+            flip = values[:, 4].view(batch, 1, 1, 1) < 0.5
+        else:
+            flip = torch.full(
+                (batch, 1, 1, 1),
+                force_flip,
+                device=crops.device,
+                dtype=torch.bool,
+            )
+        view = torch.where(flip, torch.flip(view, dims=(-1,)), view)
+        brightness = 0.90 + values[:, 5].view(batch, 1, 1, 1) * 0.20
+        contrast = 0.90 + values[:, 6].view(batch, 1, 1, 1) * 0.20
+        spatial_mean = view.mean(dim=(-2, -1), keepdim=True)
+        view = (view - spatial_mean) * contrast + spatial_mean
+        view = view * brightness
+        blurred = F.avg_pool2d(view, kernel_size=3, stride=1, padding=1)
+        blur = values[:, 7].view(batch, 1, 1, 1) < 0.30
+        view = torch.where(blur, blurred, view)
+        noise_scale = values[:, 8].view(batch, 1, 1, 1) * 0.015
+        noise = torch.randn(
+            view.shape,
+            device=view.device,
+            dtype=view.dtype,
+            generator=generator,
+        )
+        view = view + noise * noise_scale
+
+        # Canonical ArcFace alignment places eyes near y=52 and mouth near y=92.
+        # Occluding either region makes a particular blink or smile unreliable as
+        # the sole identity shortcut while retaining most of the aligned face.
+        occlusion = self._random_values(batch * 2, crops, generator=generator).reshape(
+            batch, 2
+        )
+        eye_mask = torch.ones(1, 1, 112, 112, device=view.device, dtype=view.dtype)
+        eye_mask[:, :, 42:61, 18:94] = 0.0
+        mouth_mask = torch.ones_like(eye_mask)
+        mouth_mask[:, :, 77:105, 27:86] = 0.0
+        region_mask = torch.where(
+            (occlusion[:, 1] < 0.5).view(batch, 1, 1, 1),
+            eye_mask,
+            mouth_mask,
+        )
+        mask = torch.where(
+            (occlusion[:, 0] < 0.35).view(batch, 1, 1, 1),
+            region_mask,
+            torch.ones_like(region_mask),
+        )
+        fill = view.mean(dim=(-2, -1), keepdim=True)
+        view = view * mask + fill * (1.0 - mask)
+        return view.clamp(-1.0, 1.0)
+
+    def _eot_crops(
+        self,
+        crops: torch.Tensor,
+        views: int,
+        *,
+        generator: torch.Generator | None = None,
+    ) -> torch.Tensor:
+        variants = [crops.float()]
+        variants.extend(
+            self._augment_aligned_view(
+                crops,
+                generator=generator,
+                force_flip=view_index % 2 == 1,
+            )
+            for view_index in range(1, views)
+        )
+        return torch.cat(variants, dim=0)
+
+    def encode_reward_faces(self, crops: torch.Tensor) -> torch.Tensor:
+        """Encode clean or EOT-averaged crops depending on autograd context."""
+        views = self.eot_views if torch.is_grad_enabled() and crops.requires_grad else 1
+        embeddings = self.encode_faces(self._eot_crops(crops, views))
+        if views == 1:
+            return embeddings
+        embeddings = embeddings.reshape(views, crops.shape[0], -1).mean(dim=0)
+        return F.normalize(embeddings, dim=-1)
+
     def crop_tensor(self, image: torch.Tensor, face: dict[str, Any]) -> torch.Tensor:
         if self.crop_mode == "aligned" and face.get("kps") is not None:
             matrix = estimate_arcface_matrix(face["kps"])
@@ -432,22 +604,62 @@ class FaceSimilarityReward(nn.Module):
 
     def _encode_reference_crops(self, crops: list[torch.Tensor]) -> torch.Tensor:
         with torch.no_grad():
-            return self.encode_faces(torch.cat(crops, dim=0)).detach()
+            generator = torch.Generator(device=self.device).manual_seed(17_042)
+            embeddings = []
+            for crop in crops:
+                views = self._eot_crops(
+                    crop,
+                    self.reference_eot_views,
+                    generator=generator,
+                )
+                embedding = self.encode_faces(views).mean(dim=0, keepdim=True)
+                embeddings.append(F.normalize(embedding, dim=-1))
+            return torch.cat(embeddings, dim=0).detach()
 
     def identity_scores(self, embeddings: torch.Tensor) -> torch.Tensor:
-        """Robust cosine identity score using a prototype and nearby views."""
+        """Raw centroid cosine used for deterministic evaluation metrics."""
         embeddings = F.normalize(embeddings.float(), dim=-1)
         prototype = self.reference_prototype.to(embeddings)
-        references = self.reference_embeddings.to(embeddings)
-        prototype_score = embeddings @ prototype.t()
-        reference_scores = embeddings @ references.t()
-        temperature = self.nearest_temperature
-        smooth_nearest = temperature * (
-            torch.logsumexp(reference_scores / temperature, dim=-1)
-            - math.log(reference_scores.shape[-1])
+        return (embeddings @ prototype.t()).squeeze(-1)
+
+    def identity_reward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """Saturated centroid reward with a small anti-copy entropy penalty."""
+        embeddings = F.normalize(embeddings.float(), dim=-1)
+        scores = self.identity_scores(embeddings)
+        temperature = self.saturation_temperature
+        reward = -temperature * F.softplus(
+            (self.target_similarity - scores) / temperature
         )
-        weight = self.nearest_reference_weight
-        return (1.0 - weight) * prototype_score.squeeze(-1) + weight * smooth_nearest
+        references = self.reference_embeddings.to(embeddings)
+        if references.shape[0] > 1 and self.reference_entropy_weight > 0.0:
+            logits = (embeddings @ references.t()) / self.reference_entropy_temperature
+            probabilities = logits.softmax(dim=-1)
+            log_probabilities = logits.log_softmax(dim=-1)
+            kl_uniform = (
+                probabilities * (log_probabilities + math.log(references.shape[0]))
+            ).sum(dim=-1)
+            reward = reward - self.reference_entropy_weight * kl_uniform
+        return reward
+
+    def reference_assignment_stats(
+        self, embeddings: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Measure whether an embedding collapses toward one reference view."""
+        embeddings = F.normalize(embeddings.float(), dim=-1)
+        references = self.reference_embeddings.to(embeddings)
+        reference_scores = embeddings @ references.t()
+        probabilities = (reference_scores / self.reference_entropy_temperature).softmax(
+            dim=-1
+        )
+        entropy = -(probabilities * probabilities.clamp_min(1e-12).log()).sum(dim=-1)
+        nearest = reference_scores.max(dim=-1).values
+        centroid = self.identity_scores(embeddings)
+        return {
+            "nearest_reference_similarity": nearest,
+            "nearest_centroid_gap": nearest - centroid,
+            "reference_assignment_entropy": entropy,
+            "reference_assignment_max_probability": probabilities.max(dim=-1).values,
+        }
 
     @staticmethod
     def _fallback_crops(image: torch.Tensor) -> torch.Tensor:
@@ -481,11 +693,67 @@ class FaceSimilarityReward(nn.Module):
         )
 
     def _fallback_reward(self, image: torch.Tensor) -> torch.Tensor:
-        embeddings = self.encode_faces(self._fallback_crops(image))
-        return (
-            self._smooth_max(self.identity_scores(embeddings))
-            - 1.0
-            - self.no_face_penalty
+        crops = self._fallback_crops(image)
+        embeddings = self.encode_reward_faces(crops)
+        return self._smooth_max(self.identity_reward(embeddings)) - self.no_face_penalty
+
+    def _primary_crop(self, image: torch.Tensor) -> torch.Tensor | None:
+        if image.dim() == 4:
+            if image.shape[0] != 1:
+                raise ValueError("pairwise face rewards expect one image at a time")
+            image = image[0]
+        faces = self.detect_faces(tensor_to_bgr(image))
+        faces.sort(key=self._face_area, reverse=True)
+        for face in faces:
+            try:
+                return self.crop_tensor(image, face)
+            except Exception:  # noqa: BLE001 - ignore only invalid face geometry.
+                continue
+        return None
+
+    @staticmethod
+    def _face_area(face: dict[str, Any]) -> float:
+        x1, y1, x2, y2 = np.asarray(face["bbox"], dtype=np.float32)
+        return max(float(x2 - x1), 0.0) * max(float(y2 - y1), 0.0)
+
+    @staticmethod
+    def expression_descriptor(crop: torch.Tensor) -> torch.Tensor:
+        """Low-frequency aligned eye/mouth descriptor with direct image gradients."""
+        gray = crop[:, 0:1] * 0.299 + crop[:, 1:2] * 0.587 + crop[:, 2:3] * 0.114
+        gray = F.avg_pool2d(gray, kernel_size=5, stride=4, padding=2)
+        eyes = gray[:, :, 9:17, 3:25]
+        mouth = gray[:, :, 17:27, 6:23]
+        descriptor = torch.cat((eyes.flatten(1), mouth.flatten(1)), dim=1)
+        return F.layer_norm(descriptor, (descriptor.shape[-1],))
+
+    def pairwise_reward(
+        self,
+        first: torch.Tensor,
+        second: torch.Tensor,
+        prompt: str | None = None,
+        **kwargs,
+    ) -> torch.Tensor:
+        """Encourage expression diversity only when the prompt leaves it open."""
+        del kwargs
+        zero = (first.sum() + second.sum()) * 0.0
+        if self.expression_diversity_weight <= 0.0 or (
+            prompt and EXPRESSION_PROMPT_RE.search(prompt)
+        ):
+            return zero
+        first_crop = self._primary_crop(first)
+        second_crop = self._primary_crop(second)
+        if first_crop is None or second_crop is None:
+            return zero
+        first_descriptor = self.expression_descriptor(first_crop)
+        second_descriptor = self.expression_descriptor(second_crop)
+        distance = F.smooth_l1_loss(
+            first_descriptor,
+            second_descriptor,
+            reduction="mean",
+            beta=0.1,
+        )
+        return -self.expression_diversity_weight * F.relu(
+            self.expression_diversity_margin - distance
         )
 
     def forward(self, image: torch.Tensor, prompt: str | None = None, **kwargs):
@@ -503,8 +771,13 @@ class FaceSimilarityReward(nn.Module):
             if not faces:
                 rewards.append(self._fallback_reward(img))
                 continue
+            # A character prompt has one primary subject. Bounding the reward to
+            # the largest face plus one secondary keeps recognition activations
+            # independent of spurious detector count and prevents a tiny
+            # background face from winning the identity max.
+            faces.sort(key=self._face_area, reverse=True)
             crops = []
-            for face in faces:
+            for face in faces[:2]:
                 try:
                     crops.append(self.crop_tensor(img, face))
                 except Exception:  # noqa: BLE001 - ignore only the invalid geometry.
@@ -512,14 +785,12 @@ class FaceSimilarityReward(nn.Module):
             if not crops:
                 rewards.append(self._fallback_reward(img))
                 continue
-            embeddings = self.encode_faces(torch.cat(crops, dim=0))
-            scores = self.identity_scores(embeddings)
-            ordered = torch.sort(scores, descending=True).values
-            value = ordered[0] - 1.0
-            if ordered.numel() > 1 and self.duplicate_identity_weight > 0.0:
-                duplicate = F.relu(
-                    ordered[1:] - self.duplicate_identity_threshold
-                ).mean()
+            primary_embedding = self.encode_reward_faces(crops[0])
+            value = self.identity_reward(primary_embedding).squeeze(0)
+            if len(crops) > 1 and self.duplicate_identity_weight > 0.0:
+                secondary_embedding = self.encode_faces(crops[1])
+                secondary_score = self.identity_scores(secondary_embedding).squeeze(0)
+                duplicate = F.relu(secondary_score - self.duplicate_identity_threshold)
                 value = value - self.duplicate_identity_weight * duplicate
             rewards.append(value.to(image.device))
 

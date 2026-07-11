@@ -76,14 +76,25 @@ Face discovery and download are exclusive to face-specific commands.
 
 The short command uses 500 SFT steps followed by 60 DRaFT-LV updates, rank 32,
 batch size 1, 64 generated prompts, `draft_k=1`, one LV perturbation, 12
-training denoising steps, a 5e-5 DRaFT learning rate, CFG 4.5, seed 42, and
+training denoising steps, a 1e-4 DRaFT learning rate, CFG 4.5, seed 42, and
 ten fixed validation images generated with 20 steps. Use `--help` for controls
 such as step counts, validation, caption/prompt models, regeneration, and
 `--force`.
 
-Higher reward learning rates achieved larger automatic face-model scores, but
-visibly overfit identity in qualitative review. They remain available as
-explicit research overrides rather than production defaults.
+The saturated reward, QKVO restriction, EOT, and prompt-diversity controls make
+1e-4 usable without the reference-expression collapse seen in the earlier
+unprotected high-rate runs.
+
+During DRaFT the complete SFT adapter remains loaded and saved, but only its
+Q/K/V/O LoRA tensors are optimized; attention gating and MLP LoRAs retain their
+exact SFT values. Face training uses a saturated centroid reward rather than a
+nearest-reference bonus, averages recognition over weak aligned-crop
+augmentations, and applies a balanced expression schedule. One quarter of
+training prompts leave expression unspecified. A second balanced schedule
+covers frontal, three-quarter, profile, high/low, and oblique viewpoints while
+leaving one quarter unspecified. Every fourth update replaces
+the correlated LV auxiliary sample with an independent trajectory and adds an
+aligned eye/mouth diversity term for those unspecified prompts.
 
 ```text
 runs/my_character/

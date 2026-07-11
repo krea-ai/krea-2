@@ -24,7 +24,7 @@ through a generator.
 
 ## Recommended order
 
-### 1. Fix and saturate the identity reward
+### 1. Fix and saturate the identity reward — implemented
 
 Use the normalized identity centroid only at first
 (`nearest_reference_weight=0`). Do not keep pushing cosine similarity toward
@@ -52,7 +52,7 @@ Build the centroid with one equal vote per source image. Downweight or exclude
 blurred, heavily occluded, extreme-profile, and closed-eye crops as identity
 anchors while retaining them as SFT images with accurate captions.
 
-### 2. Anchor DRaFT to the frozen SFT-500 model
+### 2. Anchor DRaFT to the frozen SFT-500 model — not implemented
 
 Keep a frozen copy of the initial SFT LoRA and penalize deviation of the
 trainable model's velocity prediction on the same `(x_t, prompt, t)`:
@@ -69,41 +69,73 @@ the anchor only. This is the DRaFT analogue of class-prior preservation: it
 keeps neutral face, pose, expression, and prompt behavior close to the model
 that existed before reward optimization.
 
-Regularizing effective LoRA deltas is a cheaper fallback, but raw `A/B` L2 is
-factorization-dependent. Prediction anchoring is the better primary method.
+This teacher-forward design was deliberately rejected for the current profile.
+It adds another DiT evaluation and directly constrains outputs, but its compute
+cost works against the shortest-training-time objective.
 
-### 3. Restrict which SFT LoRA tensors DRaFT may update
+#### Lower-cost anchoring candidates
 
-The current trainer updates every INT8 linear inside each DiT block:
-attention `wq`, `wk`, `wv`, attention `gate`, `wo`, and MLP `gate`, `up`, and
-`down`. For DRaFT, load the complete SFT adapter but freeze all except the
-selected modules. Do not remove the frozen SFT tensors from the adapter.
+The preferred future experiment is **effective-delta L2-SP**. Preserve the
+SFT-500 effective LoRA update, not its arbitrary factorization:
 
-Test these in order:
+```text
+L_SP = lambda_SP * sum_layers ||B A - B_SFT A_SFT||_F^2
+```
 
-1. `wv + wo` only, rank 32;
-2. `wq + wk + wv + wo`, rank 32;
-3. QKVO, rank 16;
-4. all block linears, current control.
+The Frobenius term can be evaluated through rank-by-rank Gram matrices without
+materializing the large dense update. This is invariant to equivalent LoRA
+factorizations, adds no DiT forward, and anchors exactly to SFT rather than to
+zero. Ordinary AdamW is not a substitute: weight decay pulls `A/B` toward zero
+and can erase the useful SFT adapter. [L2-SP](https://proceedings.mlr.press/v80/li18a/li18a.pdf)
+is the closest established starting-point regularizer.
 
-QKVO should reduce capacity substantially by freezing attention gating and
-all MLPs. However, Krea 2 uses single-stream attention over combined text and
-image tokens, not classic cross-attention. Changing Q/K changes token routing
-and can weaken prompt or expression control. V/O-only is therefore a serious
-candidate, not merely an additional low-capacity baseline. Custom Diffusion's
-finding that a small attention subset is enough for subject customization
-supports this direction, but its cross-attention K/V result does not transfer
-verbatim to this architecture.
+Other candidates, in priority order:
 
-### 4. Optimize expected reward over face augmentations
+1. **Interleaved cached-SFT replay:** every Nth update uses the saved SFT
+   latent/text cache and flow objective. It needs no teacher model and protects
+   actual denoising behavior, but adds a full DiT forward/backward and requires
+   bringing the SFT cache into the DRaFT process.
+2. **Fisher-weighted effective-delta penalty:** estimate QKVO importance from a
+   small SFT calibration pass, then penalize movement in important directions.
+   This follows [Elastic Weight Consolidation](https://doi.org/10.1073/pnas.1611835114),
+   but the diagonal Fisher is basis-dependent unless applied carefully to the
+   effective update.
+3. **SFT-gradient subspace projection:** save a low-rank sketch of SFT gradient
+   directions and project DRaFT gradients away from them. This is related to
+   [Orthogonal Gradient Descent](https://arxiv.org/abs/1910.07104), avoids a
+   teacher forward, but introduces optimizer complexity and may remove useful
+   identity directions.
+4. **Self-regularized/orthogonal LoRA updates:** constrain the DRaFT increment
+   relative to the SFT LoRA subspace, following the motivation of
+   [Continual Diffusion C-LoRA](https://arxiv.org/abs/2304.06027). This is more
+   structural than L2-SP and should follow, not precede, the simpler baseline.
 
-Apply stochastic, differentiable transforms after landmark alignment and
-before the recognition network, then average two identity losses. Recommended
-weak transforms are:
+Effective-delta L2-SP is the recommended first anchor because it is cheap,
+SFT-relative, factorization-invariant, and compatible with QKVO-only updates.
+It remains an investigation item and is not active in the trainer.
+
+### 3. Restrict which SFT LoRA tensors DRaFT may update — implemented
+
+SFT updates every INT8 linear inside each DiT block: attention `wq`, `wk`,
+`wv`, attention `gate`, `wo`, and MLP `gate`, `up`, and `down`. DRaFT loads the
+complete SFT adapter but freezes all except the selected modules.
+
+DRaFT now updates Q/K/V/O only, at rank 32. Attention gating and all MLP LoRA
+tensors retain their exact SFT-500 values. The full adapter is still loaded and
+saved, preserving compatibility with existing inference and ComfyUI conversion.
+Custom Diffusion's finding that a small attention subset is enough for subject
+customization supports this capacity restriction, though its cross-attention
+K/V result does not transfer verbatim to Krea's single-stream architecture.
+
+### 4. Optimize expected reward over face augmentations — implemented
+
+The implementation applies stochastic, differentiable transforms after
+landmark alignment and before the recognition network, then averages two
+normalized embeddings. Active weak transforms are:
 
 - horizontal flip with some clean, unflipped probability;
 - scale/translation and at most about five degrees of rotation;
-- brightness, contrast, gamma, mild color temperature, blur, and sensor noise;
+- brightness, contrast, blur, and sensor noise;
 - small random occlusion of the eye or mouth region using aligned landmarks.
 
 Use the same augmentation family offline when constructing each reference
@@ -117,13 +149,12 @@ an identity shortcut. Keep transforms weak enough that antelopev2 embeddings
 remain in-distribution. Do not transform the full image before the
 non-differentiable detector; augment the aligned 112x112 crop.
 
-### 5. Separate expression from identity and reward diversity
+### 5. Separate expression from identity and reward diversity — implemented
 
-Caption every reference expression, gaze, and coarse head pose. DRaFT prompt
-generation should balance neutral, smiling, serious, eyes-open, eyes-closed,
-left/right profile, and looking-away examples. Randomly drop the expression
-clause on some training prompts so an unspecified expression learns a
-distribution rather than one canonical training face.
+DRaFT prompt generation now balances neutral, smiling, serious, eyes-open,
+eyes-closed, looking-aside, surprised, laughing, and thoughtful/lowered-gaze
+examples. It omits the expression clause on some training prompts so an
+unspecified expression learns a distribution rather than one canonical face.
 
 For neutral or expression-unspecified prompts, periodically generate two
 independent full trajectories rather than only the correlated LV perturbation.
@@ -131,15 +162,28 @@ Use:
 
 ```text
 L_pair = mean(L_identity(z1), L_identity(z2))
-       + lambda_anchor * L_anchor
        + lambda_diversity * relu(margin - distance(a1, a2))
 ```
 
-Here `a1/a2` are frozen expression/pose attributes (action units, landmarks,
-or a 3D face model), not ArcFace identity embeddings. The pair must retain
-similar identity while differing in expression or pose. Run this more
-expensive step intermittently, for example one update in four. For prompts
-that specify an expression, replace diversity with expression alignment.
+Here `a1/a2` are differentiable low-frequency descriptors of the aligned eye
+and mouth regions, not ArcFace identity embeddings. The pair retains similar
+identity while differing in expression-related image structure. The extra
+trajectory runs one update in four. Prompts that specify an expression receive
+independent identity supervision but no diversity penalty.
+
+The active schedule leaves 25% of prompts expression-unspecified and balances
+the other 75% over neutral, smiling, serious, laughing, looking aside,
+surprised, thoughtful/lowered-gaze, and closed-eye cases. Every fourth DRaFT
+step replaces the LV auxiliary sample with an independent trajectory, keeping
+the number of differentiable image graphs at two. The diversity descriptor is
+a low-frequency aligned eye/mouth representation; explicit-expression prompts
+receive independent identity supervision without a diversity penalty.
+
+A separate deterministic viewpoint schedule leaves 25% of prompts open and
+balances the remainder over frontal, left/right three-quarter, left/right
+profile, high, low, and oblique views. Generated EOT always contains a mirrored
+aligned crop, rather than relying on a random flip, so both yaw directions
+receive identity gradients even when the reference folder is one-sided.
 
 Face2Diffusion independently identifies expression leakage as an
 identity/editability problem and combines expression guidance with
@@ -184,24 +228,40 @@ optimization time on average. The slightly lower detection rate and observed
 reference-expression copying show why automatic identity similarity cannot be
 the only promotion criterion for the next phase.
 
-## Minimal ablation matrix
+## Implemented profile and four-character comparison
 
-Reuse the exact SFT-500 states and run only 60-step DRaFT branches on Julia
-Jacklin and Tommy Guerrero:
+The selected profile is fixed rather than exposed as a module-target ablation:
+QKVO rank 32, 60 DRaFT updates at 1e-4, saturated centroid target 0.45,
+anti-copy entropy weight 0.02, two generated EOT views, four reference EOT
+views, and an independent pair every fourth update. Reward memory is bounded
+to the largest generated face and one secondary duplicate; this fixed an OOM
+caused by spurious multi-face detections without letting a small background
+face win the identity maximum.
 
-| ID | Trainable modules | Identity reward | Anchor | Crop EOT |
-| --- | --- | --- | --- | --- |
-| G0 | all linears | current 75/25 | no | no |
-| G1 | all linears | saturated centroid | no | no |
-| G2 | QKVO | saturated centroid | no | no |
-| G3 | V/O | saturated centroid | no | no |
-| G4 | best of G2/G3 | saturated centroid | yes | no |
-| G5 | best of G2/G3 | saturated centroid | yes | two views |
-| G6 | G5 | saturated centroid | yes | two views + intermittent expression diversity |
+Four comparisons were retrained from scratch. Each uses 64 DRaFT prompts, ten
+held-out prompts, seed 42, 12 training and 20 evaluation steps. Similarity
+counts a missed detection as zero.
 
-G1 isolates the reward bug before capacity changes. G2/G3 test the proposed
-module restriction. G4 is expected to provide the largest generalization gain
-after G1; G5/G6 target expression-specific copying.
+| Character | QKVO DRaFT-60 | SFT-1000 | Detection (both) | Training seconds (hybrid / SFT) |
+| --- | ---: | ---: | ---: | ---: |
+| One photo | 0.6267 | 0.3721 | 100% | 636.5 / 502.8 |
+| Julia Jacklin | 0.6223 | 0.3442 | 100% | 660.4 / 575.9 |
+| Tommy Guerrero | 0.4187 | 0.2195 | 90% | 684.7 / 560.1 |
+| John Francis Flynn | 0.4924 | 0.3542 | 90% | 574.3 / 563.3 |
+| **Mean** | **0.5400** | **0.3225** | **95%** | **639.0 / 550.5** |
+
+The protected hybrid improves mean identity similarity by 67.4% at identical
+mean detection. It uses 16.1% more optimization time in aggregate, and every
+hybrid run remains below 685 seconds. For the multi-reference characters, the
+final mean reference-assignment maximum probability is 0.229–0.307; the
+single-photo value is necessarily 1.0 and is not a collapse diagnostic.
+
+The first Julia pose-aware learning curve also ran to step 100 before the
+production length was reset to 60. Its extreme profile/oblique held-out scores
+rose from 0.320 in the original protected run to 0.594–0.615, while mean
+similarity reached 0.6569. This established that viewpoint coverage, rather
+than only more updates, fixes the corner-angle failure; 60 steps was retained
+for the requested faster default.
 
 ## Literature basis
 

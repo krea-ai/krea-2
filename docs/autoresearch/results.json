@@ -26,7 +26,7 @@
     }
   },
   "recommendations": {
-    "int8_default": {"draft_lr": 0.00005, "draft_steps": 60, "method": "lv1_sampler12_k1"},
+    "int8_default": {"draft_lr": 0.0001, "draft_steps": 60, "method": "qkvo_eot_pose_diversity_lv1_sampler12_k1"},
     "fast_extended": {"draft_lr": 0.0004, "draft_steps": 40, "method": "lv1_sampler12_k1"},
     "maximum_quality": {"draft_lr": 0.0002, "draft_steps": 120, "method": "lv1_sampler12_k1"}
   },

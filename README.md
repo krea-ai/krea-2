@@ -120,8 +120,10 @@ The generic pipeline never imports face-specific dependencies. Low-level SFT,
 DRaFT-K, and flow-matching runs are available through `scripts/train.py`.
 The face pipeline defaults to the selected character-training profile: 500 SFT
 updates followed by 60 DRaFT-LV updates, with a 12-step training sampler,
-20-step validation, and a 5e-5 DRaFT learning rate. Validation uses ten images
-and seed 42.
+20-step validation, and a 1e-4 DRaFT learning rate. DRaFT updates QKVO LoRAs
+only and uses saturated centroid identity, mirrored aligned-face EOT, balanced
+expression/viewpoint prompts, and intermittent independent expression-diversity
+samples. Validation uses ten images and seed 42.
 
 
 ## Documentation

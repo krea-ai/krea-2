@@ -19,12 +19,14 @@ from krea2.inference.bf16 import checkpoints
 from krea2.inference.int8 import build_int8_pipeline
 from krea2.inference.sampling import sample as sample_images
 from krea2.quantization.int8 import (
+    LORA_TARGETS,
     LinearLoraINT8,
     add_lora_to_int8_blocks,
     load_lora_adapters,
     load_lora_state_tensors,
     lora_parameters,
     save_lora_adapters,
+    set_lora_trainable,
 )
 from krea2.training.cache import (
     build_draft_text_cache,
@@ -312,6 +314,13 @@ def save_final_sample(
 @click.option("--rank", default=32, show_default=True, type=click.Choice(["32", "64"]))
 @click.option("--lora-alpha", default=None, type=float)
 @click.option("--lora-scale", default=1.0, show_default=True, type=float)
+@click.option(
+    "--lora-target",
+    default="all",
+    show_default=True,
+    type=click.Choice(sorted(LORA_TARGETS)),
+    help="LoRA tensors optimized in this stage; adapters still save all tensors",
+)
 @click.option("--draft-k", default=1, show_default=True, type=int)
 @click.option(
     "--draft-lv-samples",
@@ -343,6 +352,13 @@ def save_final_sample(
     show_default=True,
     type=int,
     help="save generated DRaFT training images every N steps; 0 disables",
+)
+@click.option(
+    "--draft-diversity-every",
+    default=0,
+    show_default=True,
+    type=click.IntRange(0),
+    help="generate an independent reward/diversity pair every N DRaFT steps",
 )
 @click.option("--steps", default=28, show_default=True, help="denoising steps")
 @click.option("--cfg", default=4.5, show_default=True, help="CFG scale for DRaFT")
@@ -430,12 +446,14 @@ def main(
     rank,
     lora_alpha,
     lora_scale,
+    lora_target,
     draft_k,
     draft_lv_samples,
     fuse_no_grad_cfg,
     checkpoint_dit,
     checkpoint_vae,
     draft_image_every,
+    draft_diversity_every,
     steps,
     cfg,
     train_steps,
@@ -501,6 +519,8 @@ def main(
         raise click.ClickException("--draft-lv-samples requires DRaFT with --draft-k 1")
     if draft_image_every < 0:
         raise click.ClickException("--draft-image-every must be non-negative")
+    if draft_diversity_every and objective != "draft":
+        raise click.ClickException("--draft-diversity-every is DRaFT-only")
     if resume_lora is not None and resume_training_state is not None:
         raise click.ClickException(
             "--resume-lora and --resume-training-state are mutually exclusive"
@@ -546,6 +566,7 @@ def main(
         load_lora_adapters(model, resume_lora, strict=True)
     elif resume_state is not None:
         load_lora_state_tensors(model, resume_state["lora"], strict=True)
+    trainable_targets = set_lora_trainable(model, lora_target)
     if compile_mode != "none":
         compile_training_blocks(model)
     if checkpoint_dit:
@@ -716,6 +737,8 @@ def main(
         "lora_scale": str(lora_scale),
         "checkpoint": checkpoint,
         "targets": "\n".join(targets),
+        "trainable_targets": "\n".join(trainable_targets),
+        "lora_target": lora_target,
         "trigger_word": trigger_word,
         "cache_latents": str(cache_latents),
         "cache_text": str(objective == "draft"),
@@ -726,6 +749,7 @@ def main(
         "lr": str(lr),
         "draft_k": str(draft_k),
         "draft_lv_samples": str(draft_lv_samples),
+        "draft_diversity_every": str(draft_diversity_every),
         "denoising_steps": str(steps),
         "cfg": str(cfg),
         "high_noise_shift": str(high_noise_shift),
@@ -815,6 +839,12 @@ def main(
             opt.zero_grad(set_to_none=True)
             if objective == "draft":
                 prompt_list = list(prompts)
+                diversity_step = (
+                    draft_diversity_every > 0
+                    and step % draft_diversity_every == 0
+                    and hasattr(reward_obj, "pairwise_reward")
+                )
+                main_lv_samples = 0 if diversity_step else draft_lv_samples
                 out_images = draft_sample_images(
                     model,
                     ae,
@@ -833,13 +863,46 @@ def main(
                     high_noise_shift=high_noise_shift,
                     fuse_no_grad_cfg=fuse_no_grad_cfg,
                     checkpoint_vae=checkpoint_vae,
-                    lv_samples=draft_lv_samples,
+                    lv_samples=main_lv_samples,
                 )
-                reward_prompts = prompt_list * (draft_lv_samples + 1)
+                reward_prompts = prompt_list * (main_lv_samples + 1)
+                pair_indices = None
+                if diversity_step:
+                    independent = draft_sample_images(
+                        model,
+                        ae,
+                        prompt_list,
+                        text_embeddings=text_embeddings,
+                        text_masks=text_masks,
+                        negative_text_embeddings=negative_text_embeddings,
+                        negative_text_masks=negative_text_masks,
+                        steps=steps,
+                        draft_k=draft_k,
+                        guidance=cfg,
+                        seed=seed + 100_000_000 + step * batch_size,
+                        y1=y1,
+                        y2=y2,
+                        mu=mu,
+                        high_noise_shift=high_noise_shift,
+                        fuse_no_grad_cfg=fuse_no_grad_cfg,
+                        checkpoint_vae=checkpoint_vae,
+                        lv_samples=0,
+                    )
+                    independent_offset = out_images.shape[0]
+                    out_images = torch.cat((out_images, independent), dim=0)
+                    reward_prompts.extend(prompt_list)
+                    pair_indices = [
+                        (index, independent_offset + index)
+                        for index in range(len(prompt_list))
+                    ]
                 if draft_image_every > 0 and step % draft_image_every == 0:
                     save_draft_step_images(out_images, reward_prompts, output_dir, step)
                 loss, rewards = reward_loss(
-                    reward_obj, out_images, reward_prompts, reward_kw
+                    reward_obj,
+                    out_images,
+                    reward_prompts,
+                    reward_kw,
+                    pair_indices=pair_indices,
                 )
             elif cached_sft:
                 loss = cached_flow_loss(

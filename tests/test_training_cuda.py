@@ -1014,6 +1014,18 @@ def test_face_similarity_reward():
         atol=2e-5,
         rtol=2e-5,
     )
+    prototype_reward = reward.identity_reward(reward.reference_prototype)
+    opposite_reward = reward.identity_reward(-reward.reference_prototype)
+    assert prototype_reward.item() > opposite_reward.item()
+    assert reward.nearest_reference_weight == 0.0
+
+    eot_crop = torch.randn(
+        1, 3, 112, 112, device=DEV, dtype=torch.float32, requires_grad=True
+    )
+    eot_embedding = reward.encode_reward_faces(eot_crop)
+    assert eot_embedding.shape == (1, 512)
+    eot_embedding[:, 0].sum().backward()
+    assert eot_crop.grad is not None and eot_crop.grad.abs().sum().item() > 0
 
     x = torch.randn(1, 3, 112, 112, device=DEV, dtype=torch.float32)
     with torch.no_grad():
@@ -1052,6 +1064,9 @@ def test_face_similarity_reward():
         == metric_summary["identity_similarity_all"]["mean"]
     )
     assert metric_rows[0]["detected"]
+    assert metric_rows[0]["nearest_centroid_gap"] >= 0.0
+    assert metric_rows[0]["reference_assignment_entropy"] > 0.0
+    assert metric_summary["reference_assignment"]["nearest_centroid_gap"]["mean"] >= 0.0
 
     with tempfile.TemporaryDirectory() as td:
         blank_path = Path(td) / "blank.png"

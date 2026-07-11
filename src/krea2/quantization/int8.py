@@ -418,11 +418,43 @@ def add_lora_to_int8_blocks(
     return converted
 
 
-def lora_parameters(model: nn.Module):
+LORA_TARGETS = {"all", "qkvo"}
+QKVO_MODULE_NAMES = {"wq", "wk", "wv", "wo"}
+
+
+def is_lora_target(name: str, target: str) -> bool:
+    if target not in LORA_TARGETS:
+        raise ValueError(
+            f"unknown LoRA target {target!r}; expected one of {LORA_TARGETS}"
+        )
+    if target == "all":
+        return True
+    parts = _canonical_lora_module_name(name).split(".")
+    return len(parts) >= 2 and parts[-2] == "attn" and parts[-1] in QKVO_MODULE_NAMES
+
+
+def set_lora_trainable(model: nn.Module, target: str = "all") -> list[str]:
+    selected = []
+    for name, module in model.named_modules():
+        if not isinstance(module, LinearLoraINT8):
+            continue
+        trainable = is_lora_target(name, target)
+        module.lora_A.requires_grad_(trainable)
+        module.lora_B.requires_grad_(trainable)
+        if trainable:
+            selected.append(_canonical_lora_module_name(name))
+    return selected
+
+
+def lora_parameters(model: nn.Module, target: str | None = None):
+    if target is not None:
+        set_lora_trainable(model, target)
     for module in model.modules():
         if isinstance(module, LinearLoraINT8):
-            yield module.lora_A
-            yield module.lora_B
+            if module.lora_A.requires_grad:
+                yield module.lora_A
+            if module.lora_B.requires_grad:
+                yield module.lora_B
 
 
 def _canonical_lora_module_name(name: str) -> str:

@@ -30,15 +30,18 @@ export OSS_RAW=/path/to/krea2-raw.safetensors
 uv run --extra train --extra face-reward scripts/autoresearch.py \
   ../test_characters/julia_jacklin \
   --output-dir ../expirements/autoresearch/julia_jacklin \
-  --variant lv1_sampler12_lr2e4 \
-  --sft-steps 500 --draft-steps 120 --validation-every 20 \
-  --draft-k 1 --draft-lv-samples 1 --denoising-steps 12 --draft-lr 0.0002 \
+  --variant qkvo_eot_pose_lr1e4 \
+  --sft-steps 500 --draft-steps 60 --validation-every 20 \
+  --draft-k 1 --draft-lv-samples 1 --draft-diversity-every 4 \
+  --denoising-steps 12 --draft-lr 0.0001 \
   --validation-size 10 --seed 42 \
   --face-model-dir ../antelopev2
 ```
 
 Run the identical command for `../test_characters/tommy_guerrero`. Stage
 signatures make the dataset, SFT adapter, and completed variants resumable.
+The research runner fixes DRaFT updates to Q/K/V/O LoRA tensors; it loads and
+saves the complete SFT adapter but does not expose module-target ablations.
 
 ## Measurement contract
 
@@ -74,6 +77,8 @@ signatures make the dataset, SFT adapter, and completed variants resumable.
 | S2 | Increase LV learning rate from 1e-4 to 2e-4 | Quality option | Improves both characters through the 120-step budget boundary and gives maximum measured similarity. |
 | S3 | Increase LV learning rate from 2e-4 to 4e-4 | Rejected qualitatively | Face-model scores rise quickly, but generated identity visibly overfits; Tommy also regresses after step 40. |
 | S4 | Select LV-60 at 5e-5 with train 12/eval 20 | Promoted qualitatively | Side-by-side review preferred this moderate LV profile over the more aggressive automatic-metric maxima. |
+| G1 | Saturated centroid, QKVO-only DRaFT, EOT, expression/view diversity | Promoted | Removes the high-rate reference-expression failure mode and restores difficult profile identity. |
+| G2 | Protected LV-60 at 1e-4 | Production default | Four fresh comparisons improve mean similarity from 0.3225 to 0.5400 at equal 95% detection. |
 
 Raw machine-readable curves live beside experiment artifacts; consolidated
 results and rejected variants will be added here as measurements complete.
@@ -127,10 +132,11 @@ phase reallocation.
 
 The 4e-4 runs demonstrate reward overoptimization: the automated metric rises
 quickly, but qualitative identity fidelity degrades, and Tommy falls from
-0.6278 at step 40 to 0.6206 at step 60. The production INT8 default therefore
-uses the moderate LV-60 profile at 5e-5 with 12 training and 20 evaluation
-denoising steps. Higher-rate configurations remain research-only
-automatic-metric maxima, not recommended character-training defaults.
+0.6278 at step 40 to 0.6206 at step 60. After adding saturated identity,
+QKVO-only updates, aligned-face EOT, and balanced expression/viewpoint prompts,
+1e-4 no longer shows that unprotected failure mode and is the production
+LV-60 default. Higher-rate configurations remain research-only automatic-metric
+maxima.
 
 The 20-step curve is monotonic through step 80 on the all-generation metric;
 Julia reaches 0.5785 at step 90, while Tommy's 90-step projection would exceed

@@ -16,8 +16,11 @@ from krea2.quantization.int8 import (
     LinearLoraINT8,
     load_lora_state_tensors,
     lora_parameters,
+    lora_state_tensors,
+    set_lora_trainable,
 )
 from krea2.training import pipeline, trainer
+from krea2.training.objectives import reward_loss
 
 
 class StateModel(nn.Module):
@@ -31,6 +34,79 @@ class StateModel(nn.Module):
             device="cpu",
             quantization_type="rowwise",
         )
+
+
+class TargetAttention(nn.Module):
+    def __init__(self):
+        super().__init__()
+        for name in ("wq", "wk", "wv", "gate", "wo"):
+            setattr(
+                self,
+                name,
+                LinearLoraINT8(
+                    128,
+                    128,
+                    rank=32,
+                    bias=False,
+                    device="cpu",
+                    quantization_type="rowwise",
+                ),
+            )
+
+
+class TargetBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.attn = TargetAttention()
+        self.mlp = nn.Module()
+        self.mlp.up = LinearLoraINT8(
+            128,
+            128,
+            rank=32,
+            bias=False,
+            device="cpu",
+            quantization_type="rowwise",
+        )
+
+
+def test_qkvo_target_keeps_full_adapter_state():
+    model = nn.Module()
+    model.blocks = nn.ModuleList([TargetBlock()])
+    selected = set_lora_trainable(model, "qkvo")
+    assert selected == [
+        "blocks.0.attn.wq",
+        "blocks.0.attn.wk",
+        "blocks.0.attn.wv",
+        "blocks.0.attn.wo",
+    ]
+    assert len(list(lora_parameters(model))) == 8
+    assert not model.blocks[0].attn.gate.lora_A.requires_grad
+    assert not model.blocks[0].mlp.up.lora_B.requires_grad
+    assert len(lora_state_tensors(model)) == 12
+
+
+class PairReward:
+    def __call__(self, image, prompt, **kwargs):
+        del prompt, kwargs
+        return image.mean()
+
+    def pairwise_reward(self, first, second, prompt, **kwargs):
+        del prompt, kwargs
+        return -(first - second).square().mean()
+
+
+def test_reward_loss_pairwise_protocol():
+    images = torch.randn(2, 3, 4, 4, requires_grad=True)
+    loss, rewards = reward_loss(
+        PairReward(),
+        images,
+        ["unspecified", "unspecified"],
+        {},
+        pair_indices=[(0, 1)],
+    )
+    assert rewards.shape == (2,)
+    loss.backward()
+    assert images.grad is not None and images.grad.abs().sum() > 0
 
 
 def test_comparison_cli_baseline_defaults():
@@ -161,6 +237,7 @@ def test_commands_and_heldout_prompts():
             draft_lr=5e-5,
             draft_k=1,
             draft_lv_samples=1,
+            draft_diversity_every=4,
             denoising_steps=20,
             validation_steps=20,
             cfg=4.5,
@@ -173,6 +250,8 @@ def test_commands_and_heldout_prompts():
         assert "--validation-at-end" in shared_command
         assert draft_command[draft_command.index("--train-steps") + 1] == "50"
         assert draft_command[draft_command.index("--draft-lv-samples") + 1] == "1"
+        assert draft_command[draft_command.index("--draft-diversity-every") + 1] == "4"
+        assert draft_command[draft_command.index("--lora-target") + 1] == "qkvo"
         assert "--validation-at-start" not in draft_command
         assert draft_command[draft_command.index("--draft-image-every") + 1] == "0"
         assert continued_command[continued_command.index("--train-steps") + 1] == "500"

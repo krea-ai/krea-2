@@ -1,0 +1,26 @@
+{
+  "protocol": {
+    "sft_steps": 500,
+    "draft_steps": 60,
+    "draft_lr": 0.0001,
+    "draft_targets": "qkvo",
+    "draft_denoising_steps": 12,
+    "evaluation_denoising_steps": 20,
+    "validation_size": 10,
+    "seed": 42
+  },
+  "results": [
+    {"character": "one_photo", "hybrid_similarity": 0.6266783118, "sft_1000_similarity": 0.3721050888, "hybrid_detection": 1.0, "sft_1000_detection": 1.0, "hybrid_training_seconds": 636.5138, "sft_1000_training_seconds": 502.8266},
+    {"character": "julia_jacklin", "hybrid_similarity": 0.6222945631, "sft_1000_similarity": 0.3442357183, "hybrid_detection": 1.0, "sft_1000_detection": 1.0, "hybrid_training_seconds": 660.3859, "sft_1000_training_seconds": 575.8664},
+    {"character": "tommy_guerrero", "hybrid_similarity": 0.4187224731, "sft_1000_similarity": 0.2195060015, "hybrid_detection": 0.9, "sft_1000_detection": 0.9, "hybrid_training_seconds": 684.7455, "sft_1000_training_seconds": 560.0799},
+    {"character": "john_francis_flynn", "hybrid_similarity": 0.4923556823, "sft_1000_similarity": 0.3541661814, "hybrid_detection": 0.9, "sft_1000_detection": 0.9, "hybrid_training_seconds": 574.3145, "sft_1000_training_seconds": 563.3363}
+  ],
+  "mean": {
+    "hybrid_similarity": 0.5400127576,
+    "sft_1000_similarity": 0.3225032475,
+    "hybrid_detection": 0.95,
+    "sft_1000_detection": 0.95,
+    "hybrid_training_seconds": 638.9899,
+    "sft_1000_training_seconds": 550.5273
+  }
+}

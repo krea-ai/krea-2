@@ -32,6 +32,9 @@ TRAINING_CODE = [
     ROOT / "src" / "krea2" / "inference" / "int8.py",
     ROOT / "src" / "krea2" / "models" / "conditioner.py",
     ROOT / "src" / "krea2" / "inference" / "sampling.py",
+    ROOT / "src" / "krea2" / "training" / "trainer.py",
+    ROOT / "src" / "krea2" / "training" / "objectives.py",
+    ROOT / "src" / "krea2" / "preprocessing" / "prompting.py",
     ROOT / "src" / "krea2" / "rewards" / "face.py",
     ROOT / "src" / "krea2" / "kernels" / "int8.py",
 ]
@@ -157,6 +160,7 @@ def build_experiment_commands(
     draft_lr: float,
     draft_k: int,
     draft_lv_samples: int,
+    draft_diversity_every: int,
     denoising_steps: int,
     validation_steps: int,
     cfg: float,
@@ -223,6 +227,10 @@ def build_experiment_commands(
         str(draft_k),
         "--draft-lv-samples",
         str(draft_lv_samples),
+        "--draft-diversity-every",
+        str(draft_diversity_every),
+        "--lora-target",
+        "qkvo",
         "--draft-image-every",
         "0",
         "--output-dir",
@@ -419,6 +427,12 @@ def score_image_set(
     detected_scores = []
     all_scores = []
     reward_values = []
+    assignment_values: dict[str, list[float]] = {
+        "nearest_reference_similarity": [],
+        "nearest_centroid_gap": [],
+        "reference_assignment_entropy": [],
+        "reference_assignment_max_probability": [],
+    }
     for index, path in enumerate(paths):
         tensor = image_tensor(path, reward.device)
         faces = reward.detect_faces(tensor_to_bgr(tensor))
@@ -429,10 +443,19 @@ def score_image_set(
             except (RuntimeError, ValueError):
                 continue
         identity = None
+        assignment = {key: None for key in assignment_values}
         if crops:
             with torch.no_grad():
                 embeddings = reward.encode_faces(torch.cat(crops, dim=0))
-                identity = float(reward.identity_scores(embeddings).max().item())
+                identity_scores = reward.identity_scores(embeddings)
+                selected = int(identity_scores.argmax().item())
+                identity = float(identity_scores[selected].item())
+                stats = reward.reference_assignment_stats(
+                    embeddings[selected : selected + 1]
+                )
+                assignment = {key: float(value.item()) for key, value in stats.items()}
+                for key, value in assignment.items():
+                    assignment_values[key].append(value)
             detected_scores.append(identity)
         all_scores.append(0.0 if identity is None else identity)
         with torch.no_grad():
@@ -447,6 +470,7 @@ def score_image_set(
                 "face_count": len(faces),
                 "identity_similarity": identity,
                 "training_reward": training_reward,
+                **assignment,
             }
         )
 
@@ -468,6 +492,9 @@ def score_image_set(
         "identity_similarity_all": stats(all_scores),
         "mean_face_similarity": sum(all_scores) / max(len(all_scores), 1),
         "training_reward": stats(reward_values),
+        "reference_assignment": {
+            key: stats(values) for key, values in assignment_values.items()
+        },
     }
     return summary, rows
 
@@ -482,6 +509,10 @@ def write_metrics_csv(path: Path, rows: list[dict]) -> None:
         "face_count",
         "identity_similarity",
         "training_reward",
+        "nearest_reference_similarity",
+        "nearest_centroid_gap",
+        "reference_assignment_entropy",
+        "reference_assignment_max_probability",
     ]
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("w", encoding="utf-8", newline="") as handle:
@@ -551,13 +582,16 @@ def runtime_metadata() -> dict:
 )
 @click.option(
     "--draft-lr",
-    default=5e-5,
+    default=1e-4,
     show_default=True,
     type=click.FloatRange(min=0, min_open=True),
 )
 @click.option("--draft-k", default=1, show_default=True, type=click.IntRange(1))
 @click.option(
     "--draft-lv-samples", default=1, show_default=True, type=click.IntRange(0)
+)
+@click.option(
+    "--draft-diversity-every", default=4, show_default=True, type=click.IntRange(0)
 )
 @click.option(
     "--denoising-steps", default=12, show_default=True, type=click.IntRange(1)
@@ -606,6 +640,7 @@ def main(
     draft_lr: float,
     draft_k: int,
     draft_lv_samples: int,
+    draft_diversity_every: int,
     denoising_steps: int,
     validation_steps: int,
     cfg: float,
@@ -694,6 +729,7 @@ def main(
         draft_lr=draft_lr,
         draft_k=draft_k,
         draft_lv_samples=draft_lv_samples,
+        draft_diversity_every=draft_diversity_every,
         denoising_steps=denoising_steps,
         validation_steps=validation_steps,
         cfg=cfg,

@@ -107,7 +107,7 @@ def test_repo_local_deepinfra_utilities():
         calls.append(kwargs)
         return [
             f"A man in setting {index}, wearing a tailored jacket, framed as an "
-            "editorial portrait with soft directional light and a calm expression."
+            "editorial portrait with soft directional light and rich background detail."
             for index in range(5)
         ]
 
@@ -124,6 +124,10 @@ def test_repo_local_deepinfra_utilities():
     assert len(prompts) == len(set(prompts)) == 3
     assert calls and calls[0]["seed"] == 7
     assert all(prompt.startswith("A man ") for prompt in prompts)
+    assert (
+        sum(bool(prompt_script.EXPRESSION_RE.search(prompt)) for prompt in prompts) == 2
+    )
+    assert sum(bool(prompt_script.VIEW_RE.search(prompt)) for prompt in prompts) == 2
     print("ok  repo-local caption and prompt policies run without parent imports")
 
 
@@ -252,9 +256,11 @@ def test_training_commands_and_optional_trigger():
         assert "--cache-latents" in sft
         assert "--skip-final-sample" in sft
         assert draft[draft.index("--objective") + 1] == "draft"
-        assert draft[draft.index("--lr") + 1] == "5e-05"
+        assert draft[draft.index("--lr") + 1] == "0.0001"
         assert draft[draft.index("--steps") + 1] == "12"
         assert draft[draft.index("--draft-lv-samples") + 1] == "1"
+        assert draft[draft.index("--draft-diversity-every") + 1] == "4"
+        assert draft[draft.index("--lora-target") + 1] == "qkvo"
         assert draft[draft.index("--validation-steps") + 1] == "20"
         assert draft[draft.index("--resume-lora") + 1] == str(
             root / "sft" / "lora_latest.safetensors"

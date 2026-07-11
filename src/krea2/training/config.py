@@ -38,9 +38,10 @@ class PipelineConfig:
     draft_steps: int = 60
     prompt_count: int = 64
     sft_lr: float = 1e-4
-    draft_lr: float = 5e-5
+    draft_lr: float = 1e-4
     draft_k: int = 1
     draft_lv_samples: int = 1
+    draft_diversity_every: int = 4
     denoising_steps: int = 12
     validation_steps: int = 20
     cfg: float = 4.5
@@ -71,9 +72,10 @@ class TrainingConfig:
     sft_steps: int = 500
     draft_steps: int = 60
     sft_lr: float = 1e-4
-    draft_lr: float = 5e-5
+    draft_lr: float = 1e-4
     draft_k: int = 1
     draft_lv_samples: int = 1
+    draft_diversity_every: int = 4
     denoising_steps: int = 12
     validation_steps: int = 20
     cfg: float = 4.5

@@ -279,7 +279,14 @@ def draft_sample_images(
     return torch.cat(decoded, dim=0)
 
 
-def reward_loss(reward, images, prompts: list[str], reward_kwargs: dict):
+def reward_loss(
+    reward,
+    images,
+    prompts: list[str],
+    reward_kwargs: dict,
+    *,
+    pair_indices: list[tuple[int, int]] | None = None,
+):
     values = []
     for image, prompt in zip(images, prompts):
         value = reward(image.unsqueeze(0), prompt, **reward_kwargs)
@@ -300,7 +307,32 @@ def reward_loss(reward, images, prompts: list[str], reward_kwargs: dict):
             )
         values.append(value)
     rewards = torch.stack(values)
-    return -rewards.mean(), rewards.detach()
+    loss = -rewards.mean()
+    if pair_indices:
+        pairwise_reward = getattr(reward, "pairwise_reward", None)
+        if pairwise_reward is None:
+            raise TypeError(
+                "pairwise DRaFT regularization requires reward.pairwise_reward"
+            )
+        pair_values = []
+        for first, second in pair_indices:
+            prompt = prompts[first]
+            value = pairwise_reward(
+                images[first].unsqueeze(0),
+                images[second].unsqueeze(0),
+                prompt,
+                **reward_kwargs,
+            )
+            if not isinstance(value, torch.Tensor) or not value.requires_grad:
+                raise TypeError(
+                    "reward.pairwise_reward must return a differentiable tensor"
+                )
+            value = value.to(device=images.device, dtype=torch.float32).mean()
+            if not torch.isfinite(value):
+                raise ValueError("reward.pairwise_reward returned a non-finite value")
+            pair_values.append(value)
+        loss = loss - torch.stack(pair_values).mean()
+    return loss, rewards.detach()
 
 
 def save_draft_step_images(

@@ -35,7 +35,46 @@ Describe what should be learned instead: clothing, pose, action, objects,
 setting, composition, camera/framing, lighting, color palette, material
 textures, medium, and visual style. Make prompts diverse across locations,
 wardrobe, poses, camera distance, lighting, color mood, and professional or
-documentary contexts. Avoid duplicates and near-duplicates."""
+documentary contexts. Do not specify facial expression, eye state, or gaze;
+do not specify head orientation or camera elevation. The training pipeline
+adds controlled expression and viewpoint schedules after generation. Avoid
+duplicates and near-duplicates."""
+
+EXPRESSION_RE = re.compile(
+    r"\b(?:expression|smil(?:e|es|ing)|grin(?:s|ning)?|laugh(?:s|ing)?|"
+    r"surpris(?:ed|e)|frown(?:s|ing)?|"
+    r"eyes?\s+(?:open|closed)|closed[- ]eyes?|gaze|looking\s+(?:away|aside)|"
+    r"raised eyebrows?)\b",
+    re.I,
+)
+EXPRESSION_CLAUSES = (
+    "with a relaxed neutral expression and eyes open",
+    "smiling naturally with eyes open",
+    "with a serious, attentive expression and eyes open",
+    "laughing with an open, animated expression",
+    "looking slightly aside with a calm expression",
+    "looking surprised with raised eyebrows",
+    "with a thoughtful expression and a lowered gaze",
+    "with eyes gently closed in a restful expression",
+)
+VIEW_RE = re.compile(
+    r"\b(?:side[- ]profile|profile (?:view|shot)|three-quarter view|"
+    r"head (?:turned|angled)|face (?:turned|directed|facing)|"
+    r"low[- ]angle|high[- ]angle|(?:low|high) camera angle|oblique angle|"
+    r"camera elevation|overhead (?:view|shot)|"
+    r"viewed from (?:above|below))\b",
+    re.I,
+)
+VIEW_CLAUSES = (
+    "with the face directed toward the camera",
+    "with the head turned slightly left in a three-quarter view",
+    "with the head turned slightly right in a three-quarter view",
+    "shown in a clear left-side profile",
+    "shown in a clear right-side profile",
+    "seen from a slightly low camera angle with the face visible",
+    "seen from a slightly high camera angle with the face visible",
+    "captured from an oblique angle with the face clearly visible",
+)
 
 IDENTITY_CLEANUPS = (
     (
@@ -184,7 +223,57 @@ def is_allowed_prompt(prompt: str, *, required_subject: re.Pattern[str] | None) 
     if required_subject is not None and not required_subject.search(prompt):
         return False
     lowered = prompt.lower()
-    return not any(term in lowered for term in BANNED_IDENTITY_TERMS)
+    return (
+        not any(term in lowered for term in BANNED_IDENTITY_TERMS)
+        and not EXPRESSION_RE.search(prompt)
+        and not VIEW_RE.search(prompt)
+    )
+
+
+def apply_expression_schedule(
+    prompts: list[str],
+    *,
+    seed: int,
+    unspecified_fraction: float = 0.25,
+) -> list[str]:
+    """Add balanced expressions while leaving a deterministic subset open."""
+    if not 0.0 <= unspecified_fraction <= 1.0:
+        raise ValueError("unspecified_fraction must be in [0, 1]")
+    scheduled = list(prompts)
+    indices = list(range(len(scheduled)))
+    rng = random.Random(seed + 91_337)
+    rng.shuffle(indices)
+    explicit_count = len(indices) - round(len(indices) * unspecified_fraction)
+    clause_offset = rng.randrange(len(EXPRESSION_CLAUSES)) if indices else 0
+    for position, index in enumerate(indices[:explicit_count]):
+        prompt = scheduled[index].rstrip().rstrip(".!?")
+        clause = EXPRESSION_CLAUSES[
+            (position + clause_offset) % len(EXPRESSION_CLAUSES)
+        ]
+        scheduled[index] = f"{prompt}, {clause}.".strip()
+    return scheduled
+
+
+def apply_view_schedule(
+    prompts: list[str],
+    *,
+    seed: int,
+    unspecified_fraction: float = 0.25,
+) -> list[str]:
+    """Balance difficult face viewpoints while retaining open-view prompts."""
+    if not 0.0 <= unspecified_fraction <= 1.0:
+        raise ValueError("unspecified_fraction must be in [0, 1]")
+    scheduled = list(prompts)
+    indices = list(range(len(scheduled)))
+    rng = random.Random(seed + 183_719)
+    rng.shuffle(indices)
+    explicit_count = len(indices) - round(len(indices) * unspecified_fraction)
+    clause_offset = rng.randrange(len(VIEW_CLAUSES)) if indices else 0
+    for position, index in enumerate(indices[:explicit_count]):
+        prompt = scheduled[index].rstrip().rstrip(".!?")
+        clause = VIEW_CLAUSES[(position + clause_offset) % len(VIEW_CLAUSES)]
+        scheduled[index] = f"{prompt}, {clause}.".strip()
+    return scheduled
 
 
 def prompt_key(prompt: str) -> str:
@@ -281,6 +370,8 @@ Requirements:
 - Use this exact main subject phrase in every prompt: "{subject or "a person"}".
 - Keep the subject generic; do not add physical identity details.
 - Vary environment, action, framing, lighting, wardrobe, props, and mood.
+- Do not specify facial expression, eye state, or gaze.
+- Do not specify head orientation or camera elevation.
 - Keep each prompt one sentence, 35 to 80 words.
 - Do not copy source wording except unavoidable generic nouns.
 - Return only valid JSON in this format: {{"prompts": ["...", "..."]}}.
@@ -419,7 +510,8 @@ def generate_prompts(
         raise RuntimeError(
             f"only generated {len(generated)} accepted prompts out of {count}"
         )
-    return generated
+    generated = apply_expression_schedule(generated, seed=seed)
+    return apply_view_schedule(generated, seed=seed)
 
 
 def write_prompts(path: Path, prompts: list[str]) -> None:

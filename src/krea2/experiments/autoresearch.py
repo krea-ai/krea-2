@@ -134,6 +134,7 @@ def score_learning_curve(
                 "mean_face_similarity": metrics["mean_face_similarity"],
                 "face_similarity_all": metrics["identity_similarity_all"],
                 "detected_face_similarity": metrics["identity_similarity"],
+                "reference_assignment": metrics["reference_assignment"],
             }
         )
     result = {
@@ -161,9 +162,9 @@ def score_learning_curve(
     required=True,
     type=click.Path(file_okay=False, path_type=Path),
 )
-@click.option("--variant", default="lv1_sampler12_lr2e4", show_default=True)
+@click.option("--variant", default="qkvo_eot_pose_lr1e4", show_default=True)
 @click.option("--sft-steps", default=500, show_default=True, type=click.IntRange(1))
-@click.option("--draft-steps", default=120, show_default=True, type=click.IntRange(1))
+@click.option("--draft-steps", default=60, show_default=True, type=click.IntRange(1))
 @click.option("--prompt-count", default=64, show_default=True, type=click.IntRange(1))
 @click.option(
     "--validation-size", default=10, show_default=True, type=click.IntRange(1)
@@ -174,10 +175,13 @@ def score_learning_curve(
 @click.option("--seed", default=42, show_default=True, type=int)
 @click.option("--rank", default=32, show_default=True, type=click.Choice([32, 64]))
 @click.option("--sft-lr", default=1e-4, show_default=True, type=float)
-@click.option("--draft-lr", default=2e-4, show_default=True, type=float)
+@click.option("--draft-lr", default=1e-4, show_default=True, type=float)
 @click.option("--draft-k", default=1, show_default=True, type=click.IntRange(1))
 @click.option(
     "--draft-lv-samples", default=1, show_default=True, type=click.IntRange(0)
+)
+@click.option(
+    "--draft-diversity-every", default=4, show_default=True, type=click.IntRange(0)
 )
 @click.option(
     "--denoising-steps", default=12, show_default=True, type=click.IntRange(1)
@@ -214,6 +218,7 @@ def main(
     draft_lr: float,
     draft_k: int,
     draft_lv_samples: int,
+    draft_diversity_every: int,
     denoising_steps: int,
     cfg: float,
     draft_batch_size: int,
@@ -327,6 +332,10 @@ def main(
         str(draft_k),
         "--draft-lv-samples",
         str(draft_lv_samples),
+        "--draft-diversity-every",
+        str(draft_diversity_every),
+        "--lora-target",
+        "qkvo",
         "--steps",
         str(denoising_steps),
         "--cfg",

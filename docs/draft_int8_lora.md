@@ -53,9 +53,11 @@ uv run --extra train --extra face-reward scripts/train.py \
   --rank 32 \
   --draft-k 1 \
   --draft-lv-samples 1 \
+  --draft-diversity-every 4 \
+  --lora-target qkvo \
   --steps 12 \
   --train-steps 60 \
-  --lr 0.00005 \
+  --lr 0.0001 \
   --seed 43 \
   --cfg 4.5 \
   --output-dir runs/reward_lora
@@ -64,9 +66,14 @@ uv run --extra train --extra face-reward scripts/train.py \
 `--draft-lv-samples 1` implements the lower-variance DRaFT-LV construction:
 the final generated latent is detached, re-noised at the last integration
 time, and passed through one additional differentiable denoising step. The
-original and perturbed rewards are averaged. LV currently requires
-`--draft-k 1`. Keep `--validation-steps 20` explicit when researching a
-different training sampler so evaluation remains comparable.
+original and perturbed rewards are averaged. On every fourth face-reward
+update, the independent diversity trajectory replaces the correlated LV
+auxiliary sample, keeping two differentiable image graphs. LV currently
+requires `--draft-k 1`. Keep `--validation-steps 20` explicit when researching
+a different training sampler so evaluation remains comparable.
+
+`--lora-target qkvo` freezes attention gating and MLP LoRAs during DRaFT. The
+full SFT adapter remains loaded and saved, so inference formats stay compatible.
 
 The reward object is loaded from `module:object`. If the object is a class it is
 constructed with `--reward-init-kwargs`. During training it is called as:
@@ -77,6 +84,9 @@ reward(image, prompt, **reward_kwargs)
 
 `image` is a tensor shaped `[1, C, H, W]` with values clamped to `[-1, 1]`.
 Pass `--reward-kwargs '{"key": "value"}'` to provide extra call kwargs.
+Rewards may optionally implement
+`pairwise_reward(first, second, prompt, **reward_kwargs)`; the trainer invokes
+it only on independent diversity steps.
 
 `krea2.rewards.face:FaceSimilarityReward` uses local antelopev2 ONNX files.
 Detection runs without gradients. Recognition is ported to PyTorch so the loss
@@ -85,14 +95,18 @@ images with no detected face are skipped. For multi-face reference photos the
 largest face is selected by default, avoiding the previous behavior that
 discarded the whole image because of a small background face.
 
-The reward uses a normalized identity prototype blended with a smooth
-nearest-reference score. Generated multi-face images are matched by identity,
-not merely detector confidence, and a second face resembling the target ID is
-penalized. If detection fails, three differentiable upper-center crop
-hypotheses are passed through the recognition network. A no-face image now has
-a useful image gradient instead of the former constant `-2` zero-gradient
-reward. Relevant constructor controls are `reference_face_policy`,
-`nearest_reference_weight`, `nearest_temperature`, `no_face_penalty`, and
+The face reward uses centroid cosine with a soft saturation target and a small
+reference-assignment entropy penalty; it no longer rewards the nearest
+individual reference. Recognition is averaged over clean and weakly augmented
+aligned crops, including a guaranteed mirrored view and occasional eye/mouth
+occlusion. Reference prototypes use four deterministic EOT views per source
+image. Generated multi-face images optimize the largest face and at most one
+secondary duplicate face, bounding recognition memory independently of
+spurious detector count. If detection
+fails, three differentiable upper-center crop hypotheses provide a useful
+gradient. Relevant controls include `target_similarity`,
+`saturation_temperature`, `reference_entropy_weight`, `eot_views`,
+`reference_eot_views`, `expression_diversity_weight`, `no_face_penalty`, and
 `duplicate_identity_weight`.
 
 Both SFT and DRaFT-K use the same high-noise time shift. The resolution-derived
