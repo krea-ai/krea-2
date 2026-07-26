@@ -102,6 +102,7 @@ We recommend using the following providers and open source tools for finetuning 
   - [Training](https://fal.ai/models/fal-ai/krea-2-trainer)
   - [Inference](https://fal.ai/models/fal-ai/krea-2/turbo/lora)
 - [Kohya (musubi tuner)]( https://github.com/kohya-ss/musubi-tuner)
+- [OneTrainer]( https://github.com/Nerogar/OneTrainer)
 
 ## FAQ
 
