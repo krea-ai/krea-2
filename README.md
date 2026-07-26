@@ -8,7 +8,8 @@ Krea 2 - an image generation model from [Krea AI](https://www.krea.ai).
 <a href="https://docs.krea.ai/api-reference/introduction">API Docs</a> •
 <a href="https://huggingface.co/krea/krea-2-raw">Hugging Face (RAW)</a> •
 <a href="https://huggingface.co/krea/krea-2-turbo">Hugging Face (TURBO)</a> •
-<a href="https://www.krea.ai/blog/krea-2-technical-report">Technical Blog</a>
+<a href="https://www.krea.ai/blog/krea-2-technical-report">Technical Blog</a> •
+<a href="https://colab.research.google.com/drive/1wXbyh8fdlszkdBsE6QJDj-gB9KDUqR5Y?usp=sharing"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"></a>
 </p>
 
 <img src="assets/big.png" alt="k2 banner">
