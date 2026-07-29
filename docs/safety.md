@@ -4,7 +4,7 @@ We implemented safety measures across the full model development lifecycle. We a
 
 For Krea’s hosted products incorporating Krea 2 models, we deploy input and output classifiers using a combination of proprietary and third-party detection tools to flag or block policy-violating prompts and generated images.
 
-## Safety Evaluation
+## Downstream Deployment and Reporting
 
 Because this is also an open-weights release, Krea does not control downstream deployment of the model. Under the Krea 2 Community License, deployers are required to implement content filtering measures or equivalent review processes to prevent the generation or distribution of unlawful or policy-violating content appropriate to their use case. Deployers who fail to implement required safeguards are in breach of the license. See the license for details.
 
