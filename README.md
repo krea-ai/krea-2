@@ -65,8 +65,8 @@ uv run inference.py "a fox walking in the snow" \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `prompt` (positional) | — | Text prompt to generate from. |
-| `--steps` | `28` | Number of denoising steps. |
-| `--cfg` | `4.5` | Classifier-free guidance scale (`0` disables CFG). |
+| `--steps` | `52` | Number of denoising steps. |
+| `--cfg` | `3.5` | Classifier-free guidance scale (`0` disables CFG). |
 | `--y1` | `0.5` | Timestep-shift `mu` at min resolution. |
 | `--y2` | `1.15` | Timestep-shift `mu` at max resolution. |
 | `--mu` | `None` | Pin a constant timestep-shift `mu`, overriding the resolution-derived value. Recommended `1.15` for `oss_turbo`. |

@@ -62,11 +62,11 @@ def _pipeline(
 @click.command(help="Generate images with Krea 2 (K2).")
 @click.argument("prompt")
 @click.option(
-    "--steps", default=28, show_default=True, help="number of denoising steps"
+    "--steps", default=52, show_default=True, help="number of denoising steps"
 )
 @click.option(
     "--cfg",
-    default=4.5,
+    default=3.5,
     show_default=True,
     help="classifier-free guidance scale (0 disables CFG)",
 )
