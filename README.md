@@ -6,8 +6,8 @@ Krea 2 - an image generation model from [Krea AI](https://www.krea.ai).
 
 <p align="center">
 <a href="https://docs.krea.ai/api-reference/introduction">API Docs</a> •
-<a href="https://huggingface.co/krea/krea-2-raw">Hugging Face (RAW)</a> •
-<a href="https://huggingface.co/krea/krea-2-turbo">Hugging Face (TURBO)</a> •
+<a href="https://huggingface.co/krea/Krea-2-Raw">Hugging Face (RAW)</a> •
+<a href="https://huggingface.co/krea/Krea-2-Turbo">Hugging Face (TURBO)</a> •
 <a href="https://www.krea.ai/blog/krea-2-technical-report">Technical Blog</a>
 </p>
 
